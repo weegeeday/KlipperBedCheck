@@ -266,6 +266,31 @@ def save_samples(model, items, dataset, device, threshold, path):
     plt.close(figure)
 
 
+def export_onnx(model, path, img_size):
+    export_model = copy.deepcopy(model).cpu().eval()
+    dummy = torch.randn(1, 1, img_size, img_size)
+    kwargs = {
+        'input_names': ['image'],
+        'output_names': ['logits'],
+        'dynamic_axes': {'image': {0: 'batch'}, 'logits': {0: 'batch'}},
+        'opset_version': 12,
+    }
+    try:
+        try:
+            # The legacy exporter works without onnxscript. Newer PyTorch
+            # defaults to the dynamo exporter when this argument is omitted.
+            torch.onnx.export(export_model, dummy, str(path), dynamo=False,
+                              **kwargs)
+        except TypeError:
+            torch.onnx.export(export_model, dummy, str(path), **kwargs)
+    except Exception as e:
+        print("ONNX export failed: %s" % (e,))
+        print("The PyTorch checkpoint and config are still available.")
+        return False
+    print("Exported %s" % (path,))
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', default='data/frames')
@@ -443,22 +468,6 @@ def main():
     save_samples(model, splits['test'], test_dataset, device, recommended,
                  out_dir / 'samples.png')
 
-    if not args.no_onnx:
-        try:
-            import onnx  # noqa: F401
-        except ImportError:
-            print("onnx is not installed; skipping ONNX export")
-        else:
-            export_model = copy.deepcopy(model).cpu().eval()
-            dummy = torch.randn(1, 1, args.img_size, args.img_size)
-            torch.onnx.export(
-                export_model, dummy, str(out_dir / 'model.onnx'),
-                input_names=['image'], output_names=['logits'],
-                dynamic_axes={'image': {0: 'batch'},
-                              'logits': {0: 'batch'}},
-                opset_version=12)
-            print("Exported %s" % (out_dir / 'model.onnx',))
-
     config = {
         'classes': list(CLASSES),
         'image': {
@@ -489,6 +498,9 @@ def main():
             'parameter_count': parameter_count,
             'history': history,
         }, f, indent=2, sort_keys=True)
+
+    if not args.no_onnx:
+        export_onnx(model, out_dir / 'model.onnx', args.img_size)
 
     print()
     print("Test at 0.5:              accuracy %.3f  not_clear recall %.3f"

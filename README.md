@@ -509,13 +509,13 @@ The `training/` folder contains an optional tiny-CNN pipeline for replacing or
 backing up the image diff. Frames live in `data/frames/` and are gitignored.
 
 - `python training/audit_dataset.py` reports duplicates and variation.
-- `python training/train.py` trains, evaluates and exports ONNX.
+- `python training/train.py` trains, evaluates and exports ONNX. If ONNX
+  export fails, the checkpoint, config and metrics are still written.
 - `training/colab.ipynb` is the Colab workflow.
 
 See [training/README.md](training/README.md) and [data/README.md](data/README.md).
-The clear frames collected for this project are still static (two unique
-images), so the model results are not meaningful until that set is recaptured
-with real scene variation.
+The current dataset is still only tens of unique frames per class, so treat
+model accuracy as preliminary until more varied sessions are collected.
 
 ## Tests
 

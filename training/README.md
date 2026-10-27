@@ -24,23 +24,23 @@ python training/audit_dataset.py --data data/frames --out training/reports
 This writes `training/reports/audit.json` and `contact_sheet.jpg`, and prints
 the effective unique counts.
 
-**The current batch is still not usable as a real training set.** The audit
-reported:
+**The current batch is still small.** The latest Colab audit reported
+approximately:
 
 ```
-clear      200 files ->  2 unique (99.0% duplicates)
-not_clear  295 files -> 27 unique (90.8% duplicates)
-consecutive diff median ~0.0005
+clear      211 files -> 52 unique
+not_clear  295 files -> 27 unique (21 unique within a bed-only crop)
 ```
 
-The not-clear set now has some genuine variation: 21 unique frames within a
-bed-only crop. Most of the remaining difference is the toolhead/gantry moving,
-which is not the signal we want the model to learn.
+That is enough to exercise the pipeline, but not enough to trust accuracy. The
+training split had roughly 36 clear and 19 not_clear images, and the validation
+and test sets had only 12 images each. A jump to 100% validation accuracy on
+12 images is not meaningful evidence.
 
-The clear class is still two static images. That is the current blocker:
-training would teach the model one particular empty-bed image. Capture clear
-frames with the same toolhead/gantry positions, lighting changes and angles as
-the not-clear set, or park the toolhead identically for both classes.
+The not-clear set still has relatively little bed variation; much of its
+difference is the toolhead/gantry moving. Capture the same toolhead positions
+for both classes, or park it identically for both. Add varied parts, failed
+prints, purge lines and multiple arrangements.
 
 Target at least 20–30 unique images per class before calling a result
 meaningful, and preferably hundreds across several sessions.
