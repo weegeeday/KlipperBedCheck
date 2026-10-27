@@ -509,6 +509,7 @@ The `training/` folder contains an optional tiny-CNN pipeline for replacing or
 backing up the image diff. Frames live in `data/frames/` and are gitignored.
 
 - `python training/audit_dataset.py` reports duplicates and variation.
+- `python training/draw_roi.py` opens an interactive ROI drawer.
 - `python training/show_roi.py --roi ...` previews the ROI over random frames.
 - `python training/train.py` trains, evaluates and exports ONNX. If ONNX
   export fails, the checkpoint, config and metrics are still written.

@@ -45,6 +45,39 @@ prints, purge lines and multiple arrangements.
 Target at least 20–30 unique images per class before calling a result
 meaningful, and preferably hundreds across several sessions.
 
+## Drawing the ROI
+
+```bash
+python training/draw_roi.py
+```
+
+Drag a box around the bed, then press:
+
+- `s` — print the ROI and close
+- `n` — next image
+- `r` — reset the selection
+- `q` — quit
+
+It prints the normalised values in the format needed by `train.py` and the
+camera checker config:
+
+```
+ROI: 0.0300, 0.5200, 0.8500, 0.9900
+training: python training/train.py ... --roi 0.03,0.52,0.85,0.99
+camera cfg: roi: 0.03, 0.52, 0.85, 0.99
+```
+
+Useful options:
+
+```bash
+python training/draw_roi.py --label both
+python training/draw_roi.py --image data/frames/clear/00001.jpg
+python training/draw_roi.py --out roi.json
+```
+
+A graphical display is required. On a headless printer host, run it on a
+desktop machine or use X forwarding.
+
 ## Inspecting the ROI
 
 Before training, check that the ROI actually covers the bed:
