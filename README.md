@@ -513,8 +513,9 @@ backing up the image diff. Frames live in `data/frames/` and are gitignored.
 - `training/colab.ipynb` is the Colab workflow.
 
 See [training/README.md](training/README.md) and [data/README.md](data/README.md).
-The first frame batch collected for this project was static and needs to be
-recaptured with real scene variation before the model results mean anything.
+The clear frames collected for this project are still static (two unique
+images), so the model results are not meaningful until that set is recaptured
+with real scene variation.
 
 ## Tests
 
