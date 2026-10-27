@@ -808,6 +808,17 @@ class BedClearChecker:
                     result['largest_component'], result['max_diff'])
             return result
 
+    def _save_model_roi(self, data):
+        if self.model is None:
+            return
+        try:
+            from PIL import Image
+            image = Image.open(io.BytesIO(data)).convert('L')
+            crop = crop_roi_image(image, self.model.roi)
+            crop.save(self._data_path('last_model_roi.png'))
+        except Exception as e:
+            logging.warning("could not save model ROI image: %s", e)
+
     def _save_debug(self, data, result, diff, width, height):
         try:
             extension = image_extension(data)
@@ -817,6 +828,7 @@ class BedClearChecker:
             body = bytes(max(0, min(255, int(round(value * 255.))))
                          for value in diff)
             atomic_write(self._data_path('last_diff.pgm'), header + body)
+            self._save_model_roi(data)
         except (IOError, OSError) as e:
             logging.warning("could not save debug images: %s", e)
 
@@ -828,6 +840,7 @@ class BedClearChecker:
             stale_diff = self._data_path('last_diff.pgm')
             if os.path.exists(stale_diff):
                 os.remove(stale_diff)
+            self._save_model_roi(data)
         except (IOError, OSError) as e:
             logging.warning("could not save model debug images: %s", e)
 

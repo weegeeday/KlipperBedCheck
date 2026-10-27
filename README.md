@@ -500,6 +500,8 @@ After a check the checker writes:
 - `last_snapshot.jpg` (or `.png`) - the raw frame it used.
 - `last_diff.pgm` - the normalised difference image for the ROI. Bright areas
   are what triggered the check. Only written by diff/both.
+- `last_model_roi.png` - the exact crop the model sees. If the part is not in
+  this image, the model cannot detect it.
 - `last_result.json` - the full result, including model probability or diff
   metrics and regions.
 

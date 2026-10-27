@@ -148,6 +148,7 @@ class ModelBackendTest(unittest.TestCase):
             status = bed.status()
             self.assertEqual(status['backend'], 'model')
             self.assertTrue(status['model']['loaded'])
+            self.assertTrue(pathlib.Path(tmp, 'last_model_roi.png').exists())
 
     def test_bed_checker_both_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
