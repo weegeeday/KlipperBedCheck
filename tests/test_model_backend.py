@@ -17,9 +17,16 @@ checker = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checker)
 
 
+class FakeSessionOptions:
+    def __init__(self):
+        self.intra_op_num_threads = 0
+        self.inter_op_num_threads = 0
+
+
 class FakeSession:
-    def __init__(self, path, providers=None):
+    def __init__(self, path, sess_options=None, providers=None):
         self.path = path
+        self.options = sess_options
         self.providers = providers
 
     def get_inputs(self):
@@ -43,6 +50,7 @@ class ModelBackendTest(unittest.TestCase):
         self.original = sys.modules.get('onnxruntime')
         fake = types.ModuleType('onnxruntime')
         fake.InferenceSession = FakeSession
+        fake.SessionOptions = FakeSessionOptions
         sys.modules['onnxruntime'] = fake
 
     def tearDown(self):

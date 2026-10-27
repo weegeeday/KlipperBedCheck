@@ -52,6 +52,7 @@ DEFAULT_CONFIG = {
     'model_path': '~/printer_data/bed_clear/model.onnx',
     'model_config': '~/printer_data/bed_clear/model_config.json',
     'model_threshold': None,
+    'model_threads': 1,
 }
 
 BACKENDS = ('diff', 'model', 'both')
@@ -125,6 +126,12 @@ def load_config(path):
                           % (', '.join(BACKENDS),))
     config['model_path'] = _expand(config.get('model_path') or '')
     config['model_config'] = _expand(config.get('model_config') or '')
+    try:
+        config['model_threads'] = int(config.get('model_threads', 1))
+    except (TypeError, ValueError):
+        raise ConfigError("model_threads must be an integer")
+    if config['model_threads'] < 1:
+        raise ConfigError("model_threads must be at least 1")
     model_threshold = config.get('model_threshold')
     if model_threshold in (None, ''):
         config['model_threshold'] = None
@@ -502,6 +509,7 @@ class ModelChecker:
         self.not_clear_index = 1
         self.threshold = 0.5
         self.threshold_override = config.get('model_threshold')
+        self.threads = int(config.get('model_threads', 1))
         self.roi = tuple(config['roi'])
         self.size = tuple(config['decode_size'])
         self.mean = 0.5
@@ -568,8 +576,12 @@ class ModelChecker:
                     "model threshold %.3f is high; this can miss not-clear "
                     "frames. Consider model_threshold: 0.5", self.threshold)
             import onnxruntime as ort
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = self.threads
+            options.inter_op_num_threads = 1
             self.session = ort.InferenceSession(
-                self.path, providers=['CPUExecutionProvider'])
+                self.path, sess_options=options,
+                providers=['CPUExecutionProvider'])
             inputs = self.session.get_inputs()
             if not inputs:
                 raise ModelError("ONNX model has no inputs")

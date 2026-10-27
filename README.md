@@ -470,6 +470,7 @@ The camera settings are:
 | `model_path` | `~/printer_data/bed_clear/model.onnx` | ONNX model file. |
 | `model_config` | `~/printer_data/bed_clear/model_config.json` | Training `config.json` copy; provides ROI, size, normalisation and threshold. |
 | `model_threshold` | empty | Optional threshold override; default comes from the model config. |
+| `model_threads` | `1` | ONNX Runtime CPU threads per inference. Keep at `1` to avoid CPU spikes. |
 | `decode_size` | `[80, 60]` | Diff grayscale grid size. Larger sees smaller objects, slower. |
 | `roi` | `[0, 0, 1, 1]` | Diff region of interest. The model backend uses the ROI from its own config. |
 | `cell_threshold` | `0.35` | Normalised brightness difference that counts as changed. Lower is more sensitive. |
@@ -615,6 +616,33 @@ sudo apt install ffmpeg
 ```
 
 Then restart the checker service.
+
+**The Pi is laggy / the model seems to run constantly** - The model is loaded
+once when the checker service starts and stays in memory. It does **not** run on
+a timer. Inference happens only when:
+
+- `BED_CLEAR_CHECK` or `BED_CLEAR_PEEK` is called
+- `auto_check_on_start` runs before a guarded print start
+- something calls `/check` (for example a `watch curl` loop)
+
+Between those events the service is idle. Check what is using CPU and memory:
+
+```bash
+systemctl show -p MemoryCurrent bed_clear_camera
+free -h
+top -b -n1 | head -20
+```
+
+Things that help:
+
+- Set `save_debug: false` in the camera cfg after tuning. Every check currently
+  writes a full snapshot and ROI PNG to the SD card.
+- Do not leave a `watch` loop hitting `/check` continuously.
+- Keep `model_threads: 1` so inference does not use all CPU cores.
+- If you are not using the model, set `backend: diff`; ONNX Runtime uses
+  noticeably more memory than the pure-Python diff.
+- The webcam stream itself (crowsnest/ustreamer at 1920x1080) is often the real
+  CPU load. Check `top` for `ustreamer`/`ffmpeg` as well.
 
 **"camera returned HTTP 404"** - The checker is reaching a web server but the
 snapshot path is wrong. From the printer, check what Moonraker reports and test
