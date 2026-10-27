@@ -11,3 +11,5 @@ data/frames/
 data/*.zip
 training/reports/
 training/runs/
+bedclear_run*/
+bedclear_run*.zip

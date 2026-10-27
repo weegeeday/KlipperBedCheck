@@ -210,7 +210,12 @@ def metrics_at(y_true, probabilities, threshold):
     }
 
 
-def choose_threshold(y_true, probabilities, target_recall):
+def choose_threshold(y_true, probabilities, target_recall, min_positives):
+    positives = int((y_true == 1).sum())
+    if positives < min_positives:
+        # A handful of validation positives is not enough to justify moving
+        # the decision boundary. Keep the natural 0.5 threshold.
+        return 0.5
     for threshold in np.arange(0.99, 0.049, -0.01):
         predicted = (probabilities >= threshold).astype(int)
         true_positive = int(((predicted == 1) & (y_true == 1)).sum())
@@ -311,6 +316,9 @@ def main():
     parser.add_argument('--workers', type=int, default=2)
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--target-recall', type=float, default=0.98)
+    parser.add_argument('--min-threshold-positives', type=int, default=20,
+                        help='minimum validation not_clear images before '
+                             'moving the threshold away from 0.5')
     parser.add_argument('--min-unique', type=int, default=20)
     parser.add_argument('--force', action='store_true',
                         help='train even with fewer unique images')
@@ -457,7 +465,13 @@ def main():
 
     val_probs, val_labels, _ = evaluate(model, val_loader, criterion, device)
     recommended = choose_threshold(val_labels, val_probs,
-                                   args.target_recall)
+                                   args.target_recall,
+                                   args.min_threshold_positives)
+    val_positives = int((val_labels == 1).sum())
+    threshold_reliable = val_positives >= args.min_threshold_positives
+    if not threshold_reliable:
+        print("Note: only %d validation not_clear images; keeping threshold "
+              "0.5 instead of optimising it." % (val_positives,))
     test_probs, test_labels, test_loss = evaluate(
         model, test_loader, criterion, device)
     test_default = metrics_at(test_labels, test_probs, args.threshold)
@@ -495,6 +509,8 @@ def main():
             'test_at_recommended': test_recommended,
             'test_loss': test_loss,
             'recommended_threshold': recommended,
+            'threshold_reliable': threshold_reliable,
+            'validation_not_clear_count': val_positives,
             'parameter_count': parameter_count,
             'history': history,
         }, f, indent=2, sort_keys=True)

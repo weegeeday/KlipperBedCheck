@@ -108,6 +108,27 @@ Once the model is acceptable, deploy the ONNX model through the checker
 service. Keep the image-diff result as a fallback: if the diff shows a large
 change, do not allow a `clear` prediction to override it.
 
+## First model run
+
+The first run (`run1`) used 146,130 parameters and exported a 588 KB ONNX
+model. On its 12-image test split it was perfect at threshold `0.5`, but the
+auto-selected threshold `0.96` missed 2 of 4 not-clear images. The validation
+split had only 4 not-clear images, so the threshold selection had almost
+nothing to work with.
+
+Evaluating the same checkpoint on the current unique local frames:
+
+```
+clear      max p(not_clear) = 0.337
+not_clear  min p(not_clear) = 0.543
+```
+
+That is a clean separation at `0.5`, but it is not an independent test: the
+frames are from the same recording/session. The important lesson is to keep
+the threshold at `0.5` until there are enough validation positives to justify
+moving it. `--min-threshold-positives` defaults to `20` and now falls back to
+`0.5` when the validation set is smaller.
+
 ## Current limitation
 
 The camera frames inspected so far show the toolhead filling most of the frame
