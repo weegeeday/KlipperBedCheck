@@ -503,6 +503,19 @@ Then remove `[include bed_clear.cfg]` from `printer.cfg`, delete
 `bed_clear.cfg`, `bed_clear_camera.cfg`, the checker data directory and the
 Klipper state file, and restart Klipper.
 
+## Model training
+
+The `training/` folder contains an optional tiny-CNN pipeline for replacing or
+backing up the image diff. Frames live in `data/frames/` and are gitignored.
+
+- `python training/audit_dataset.py` reports duplicates and variation.
+- `python training/train.py` trains, evaluates and exports ONNX.
+- `training/colab.ipynb` is the Colab workflow.
+
+See [training/README.md](training/README.md) and [data/README.md](data/README.md).
+The first frame batch collected for this project was static and needs to be
+recaptured with real scene variation before the model results mean anything.
+
 ## Tests
 
 The checker, image comparison, HTTP endpoints and the Klipper state machine are

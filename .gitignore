@@ -1,7 +1,12 @@
 __pycache__/
 *.pyc
 *.pgm
+*.pt
+*.onnx
 bed_clear.json
 baseline.*
 last_snapshot.*
 last_result.json
+data/frames/
+training/reports/
+training/runs/
