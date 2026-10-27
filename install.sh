@@ -119,15 +119,17 @@ if [[ $EUID -eq 0 ]]; then
     chown -R "$RUN_USER" "$DATA_DIR"
 fi
 
-# Validate the config and load the model before replacing a running service.
-if ! CHECK_OUTPUT="$("$VENV_PYTHON" "$DATA_DIR/camera_checker.py" \
+# Validate the config and model. Missing model files are a warning: the
+# service can still be installed and calibrated in diff mode.
+if CHECK_OUTPUT="$("$VENV_PYTHON" "$DATA_DIR/camera_checker.py" \
         --config "$CONFIG_DIR/bed_clear_camera.cfg" --check-config 2>&1)"; then
+    echo "Checker config: OK"
+else
     echo "$CHECK_OUTPUT" >&2
-    echo "Checker config validation failed; service not (re)installed." >&2
-    echo "Fix bed_clear_camera.cfg or the model files and re-run install.sh." >&2
-    exit 1
+    echo "WARNING: checker config/model check failed." >&2
+    echo "The service will still be installed; checks fail until this is fixed." >&2
+    echo "Check BED_CLEAR_STATUS and journalctl -u $SERVICE_NAME." >&2
 fi
-echo "Checker config: OK"
 
 UNIT_TMP="$(mktemp)"
 trap 'rm -f "$UNIT_TMP"' EXIT
