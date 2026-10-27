@@ -572,6 +572,27 @@ sudo apt install ffmpeg
 
 Then restart the checker service.
 
+**"camera returned HTTP 404"** - The checker is reaching a web server but the
+snapshot path is wrong. From the printer, check what Moonraker reports and test
+the URL:
+
+```bash
+curl -s http://127.0.0.1:7125/server/webcams/list \
+  | jq '.result.webcams[] | {name, snapshot_url, stream_url}'
+curl -sI 'http://127.0.0.1/webcam/?action=snapshot'
+```
+
+Put the working URL in `snapshot_url`, then restart the checker. Editing
+`bed_clear_camera.cfg` does not affect a running service.
+
+```bash
+sudo systemctl restart bed_clear_camera
+sudo systemctl status bed_clear_camera
+```
+
+Relative Moonraker webcam URLs are resolved against the web frontend, not the
+Moonraker API port.
+
 **Snapshot fetch fails** - Open the `snapshot_url` in a browser on the printer
 host. If Moonraker authentication is enabled, set `api_key`.
 

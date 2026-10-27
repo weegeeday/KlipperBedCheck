@@ -440,7 +440,13 @@ class SnapshotSource:
             if not url:
                 raise SnapshotError("the Moonraker webcam has no snapshot_url")
             if url.startswith('/'):
-                url = self.config['moonraker_url'] + url
+                # Moonraker returns webcam paths relative to the web frontend
+                # (nginx), not to its API port. Drop the API port.
+                parts = urllib.parse.urlsplit(self.config['moonraker_url'])
+                host = parts.hostname or '127.0.0.1'
+                if ':' in host:
+                    host = '[%s]' % (host,)
+                url = '%s://%s%s' % (parts.scheme or 'http', host, url)
         self._resolved_url = url
         return url
 
@@ -466,9 +472,11 @@ class SnapshotSource:
                         request, timeout=timeout) as response:
                     data = response.read()
             except urllib.error.HTTPError as e:
-                raise SnapshotError("camera returned HTTP %s" % (e.code,))
+                raise SnapshotError("camera returned HTTP %s from %s"
+                                    % (e.code, url))
             except (urllib.error.URLError, OSError) as e:
-                raise SnapshotError("unable to fetch snapshot: %s" % (e,))
+                raise SnapshotError("unable to fetch snapshot %s: %s"
+                                    % (url, e))
         if not data:
             raise SnapshotError("camera returned an empty snapshot")
         return data

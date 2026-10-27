@@ -102,6 +102,34 @@ class ComponentTest(unittest.TestCase):
         self.assertEqual(crop, [6, 7, 8, 11, 12, 13])
 
 
+class SnapshotSourceTest(unittest.TestCase):
+    def make_source(self, moonraker_url):
+        source = checker.SnapshotSource({
+            'snapshot_url': '',
+            'snapshot_command': '',
+            'moonraker_url': moonraker_url,
+            'webcam': '',
+            'api_key': '',
+            'snapshot_timeout': 5.0,
+        })
+        source._moonraker_json = lambda path: {
+            'result': {'webcams': [{
+                'name': 'main',
+                'snapshot_url': '/webcam/?action=snapshot',
+            }]}}
+        return source
+
+    def test_relative_snapshot_uses_frontend_port(self):
+        source = self.make_source('http://printer:7125')
+        self.assertEqual(source.resolve_url(),
+                         'http://printer/webcam/?action=snapshot')
+
+    def test_relative_snapshot_keeps_https(self):
+        source = self.make_source('https://printer:7125')
+        self.assertEqual(source.resolve_url(),
+                         'https://printer/webcam/?action=snapshot')
+
+
 class ConfigTest(unittest.TestCase):
     def test_defaults_and_override(self):
         with tempfile.TemporaryDirectory() as tmp:
