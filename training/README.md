@@ -154,34 +154,47 @@ For a trustworthy result:
 
 - collect at least several sessions/days and lighting states
 - keep a held-out session that the model has never seen
-- check `test_at_recommended` in `metrics.json`, especially
+- check `test_at_deployment` in `metrics.json`, especially
   `not_clear_recall` and the confusion matrix
+- compare `test_at_deployment` with `test_at_recommended`; the recommended
+  threshold is informational and is not written to `config.json`
 - look at `samples.png` for false clear/false not-clear examples
 
 Once the model is acceptable, deploy the ONNX model through the checker
 service. Keep the image-diff result as a fallback: if the diff shows a large
 change, do not allow a `clear` prediction to override it.
 
-## First model run
+## Model run notes
 
-The first run (`run1`) used 146,130 parameters and exported a 588 KB ONNX
-model. On its 12-image test split it was perfect at threshold `0.5`, but the
-auto-selected threshold `0.96` missed 2 of 4 not-clear images. The validation
-split had only 4 not-clear images, so the threshold selection had almost
-nothing to work with.
+The current model uses 146,130 parameters and exports a 588 KB ONNX file. The
+latest dataset has 263 unique clear and 328 unique not-clear frames, split into
+415 train / 88 validation / 88 test.
 
-Evaluating the same checkpoint on the current unique local frames:
+On the 88-image test split:
+
+| Threshold | Accuracy | not-clear recall | Missed not-clear |
+| --- | ---: | ---: | ---: |
+| `0.5` | 100% | 100% | 0 |
+| `0.9` | 100% | 100% | 0 |
+| `0.95` | 98.9% | 98.0% | 1 |
+| `0.98` | 95.5% | 91.8% | 4 |
+
+The auto-suggested threshold (`0.98`) is too aggressive: it was chosen to meet
+98% recall on validation, but it missed four test frames that were just below
+the cutoff. The exported `config.json` now uses the explicit `--threshold`
+value, not the auto suggestion. The default is `0.5`; the recommendation is
+still recorded for reference.
+
+On the current unique local frames the model separates cleanly:
 
 ```
-clear      max p(not_clear) = 0.337
-not_clear  min p(not_clear) = 0.543
+clear      max p(not_clear) = 0.020
+not_clear  min p(not_clear) = 0.934
 ```
 
-That is a clean separation at `0.5`, but it is not an independent test: the
-frames are from the same recording/session. The important lesson is to keep
-the threshold at `0.5` until there are enough validation positives to justify
-moving it. `--min-threshold-positives` defaults to `20` and now falls back to
-`0.5` when the validation set is smaller.
+That is a strong margin at `0.5`, but it is not an independent test: the frames
+are from the same recording/session. Keep a separate session for the final
+evaluation.
 
 ## Current limitation
 

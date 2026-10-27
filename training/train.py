@@ -314,7 +314,9 @@ def main():
     parser.add_argument('--width', type=int, default=16)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--workers', type=int, default=2)
-    parser.add_argument('--threshold', type=float, default=0.5)
+    parser.add_argument('--threshold', type=float, default=0.5,
+                        help='decision threshold written to config.json '
+                             '(default 0.5)')
     parser.add_argument('--target-recall', type=float, default=0.98)
     parser.add_argument('--min-threshold-positives', type=int, default=20,
                         help='minimum validation not_clear images before '
@@ -474,13 +476,13 @@ def main():
               "0.5 instead of optimising it." % (val_positives,))
     test_probs, test_labels, test_loss = evaluate(
         model, test_loader, criterion, device)
-    test_default = metrics_at(test_labels, test_probs, args.threshold)
+    test_deployment = metrics_at(test_labels, test_probs, args.threshold)
     test_recommended = metrics_at(test_labels, test_probs, recommended)
 
-    save_confusion(np.array(test_recommended['confusion_matrix']),
+    save_confusion(np.array(test_deployment['confusion_matrix']),
                    out_dir / 'confusion_matrix.png')
-    save_samples(model, splits['test'], test_dataset, device, recommended,
-                 out_dir / 'samples.png')
+    save_samples(model, splits['test'], test_dataset, device,
+                 args.threshold, out_dir / 'samples.png')
 
     config = {
         'classes': list(CLASSES),
@@ -493,7 +495,8 @@ def main():
         },
         'model': {'type': 'SmallCNN', 'width': args.width,
                   'parameters': parameter_count},
-        'threshold': recommended,
+        'threshold': args.threshold,
+        'recommended_threshold': recommended,
         'target_recall': args.target_recall,
     }
     with open(out_dir / 'config.json', 'w') as f:
@@ -505,7 +508,8 @@ def main():
                                  else args.dedupe_threshold),
             'splits': {name: len(items) for name, items in splits.items()},
             'validation': metrics_at(val_labels, val_probs, recommended),
-            'test_at_0.5': test_default,
+            'test_at_deployment': test_deployment,
+            'test_at_0.5': metrics_at(test_labels, test_probs, 0.5),
             'test_at_recommended': test_recommended,
             'test_loss': test_loss,
             'recommended_threshold': recommended,
@@ -519,9 +523,10 @@ def main():
         export_onnx(model, out_dir / 'model.onnx', args.img_size)
 
     print()
-    print("Test at 0.5:              accuracy %.3f  not_clear recall %.3f"
-          % (test_default['accuracy'], test_default['not_clear_recall']))
-    print("Test at recommended %.2f: accuracy %.3f  not_clear recall %.3f"
+    print("Test at deployment %.2f:  accuracy %.3f  not_clear recall %.3f"
+          % (args.threshold, test_deployment['accuracy'],
+             test_deployment['not_clear_recall']))
+    print("Test at suggested %.2f:   accuracy %.3f  not_clear recall %.3f"
           % (recommended, test_recommended['accuracy'],
              test_recommended['not_clear_recall']))
     print("Artifacts: %s" % (out_dir,))
