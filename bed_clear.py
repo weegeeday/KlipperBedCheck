@@ -78,6 +78,8 @@ class BedClear:
         gcode = self.gcode
         gcode.register_command('BED_CLEAR_CHECK', self.cmd_BED_CLEAR_CHECK,
                                desc=self.cmd_BED_CLEAR_CHECK_help)
+        gcode.register_command('BED_CLEAR_PEEK', self.cmd_BED_CLEAR_PEEK,
+                               desc=self.cmd_BED_CLEAR_PEEK_help)
         gcode.register_command('BED_CLEAR_CALIBRATE',
                                self.cmd_BED_CLEAR_CALIBRATE,
                                desc=self.cmd_BED_CLEAR_CALIBRATE_help)
@@ -359,6 +361,38 @@ class BedClear:
             gcmd.respond_info("bed_clear: %s" % (reason,))
             return
         self._run_camera_check(gcmd)
+
+    cmd_BED_CLEAR_PEEK_help = ("Read the current camera/model result without "
+                               "changing bed state")
+
+    def cmd_BED_CLEAR_PEEK(self, gcmd):
+        if self.method == 'manual':
+            raise gcmd.error("bed_clear: BED_CLEAR_PEEK requires "
+                             "method: camera")
+        self._require_idle(gcmd)
+        try:
+            self._park()
+            result = self._request('/check')
+        except Exception as e:
+            raise gcmd.error("bed_clear: camera peek failed: %s" % (e,))
+        backend = str(result.get('backend') or '')
+        clear = result.get('clear')
+        probability = result.get('probability')
+        threshold = result.get('threshold')
+        lines = ["bed_clear: peek backend=%s clear=%s"
+                 % (backend, clear)]
+        if probability is not None:
+            lines.append("  p(not_clear)=%.4f  threshold=%.4f"
+                         % (self._as_float(probability),
+                            self._as_float(threshold)))
+        if 'changed_fraction' in result:
+            lines.append("  changed=%.2f%%  largest=%d cells"
+                         % (self._as_float(result.get('changed_fraction'))
+                            * 100.,
+                            self._as_int(result.get('largest_component'))))
+        if result.get('reason'):
+            lines.append("  reason: %s" % (result.get('reason'),))
+        gcmd.respond_info("\n".join(lines))
 
     def _run_camera_check(self, gcmd):
         try:

@@ -295,6 +295,7 @@ first print immediately.
 | Command | Purpose |
 | --- | --- |
 | `BED_CLEAR_CHECK` | Ask the camera. Raises a gcode error when the bed is not clear. In `manual` mode it only checks the current confirmation. |
+| `BED_CLEAR_PEEK` | Capture a frame and report the model/diff result without changing `printer.bed_clear`. |
 | `BED_CLEAR_CALIBRATE` | Capture a new empty-bed camera baseline (diff and both backends; optional for model-only). |
 | `BED_CLEAR_CONFIRM` | Mark the bed clear after clearing it by hand. |
 | `BED_CLEAR_MARK_DIRTY [REASON=...]` | Mark the bed unverified, e.g. at the end of a custom print macro. |
@@ -305,6 +306,47 @@ first print immediately.
 `BED_CLEAR_CHECK` refuses to run while `print_stats` reports `printing` or
 `paused`. Run it while the printer is idle, before starting the next job. Do not
 put it inside `PRINT_START`: by then the print already counts as running.
+
+### Reading the current model value
+
+Use:
+
+```gcode
+BED_CLEAR_PEEK
+```
+
+This parks the toolhead, captures a new frame, and prints the model result
+without changing the bed state. Example:
+
+```
+bed_clear: peek backend=model clear=False
+  p(not_clear)=0.9987  threshold=0.5000
+  reason: model p(not_clear)=0.999 >= threshold 0.500
+```
+
+`clear` is `p(not_clear) < threshold`.
+
+The same sample is available over HTTP without touching Klipper state:
+
+```bash
+curl -s http://127.0.0.1:7126/check | jq
+```
+
+`/status` also contains the last result:
+
+```bash
+curl -s http://127.0.0.1:7126/status | jq '.last'
+```
+
+For a live readout while you move things around:
+
+```bash
+watch -n 2 "curl -s http://127.0.0.1:7126/check | jq '{clear, probability, threshold}'"
+```
+
+`BED_CLEAR_STATUS` shows the result of the last check; it does not take a new
+snapshot. `BED_CLEAR_PEEK` requires an idle printer, and `/check` in `both`
+mode still needs the diff baseline.
 
 ## Queue integration
 

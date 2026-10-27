@@ -228,6 +228,17 @@ class CameraCheckTest(unittest.TestCase):
             self.assertIn('p(not_clear)=0.020', summary)
             self.assertIn('changed cells', summary)
 
+    def test_peek_does_not_change_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            obj, _ = self.make(tmp)
+            self.fake_request(obj, MODEL_RESULT)
+            gcmd = FakeGcmd()
+            obj.cmd_BED_CLEAR_PEEK(gcmd)
+            self.assertEqual(obj.state, 'unknown')
+            self.assertFalse(obj.get_status(0.)['clear'])
+            self.assertTrue(any('p(not_clear)=0.9300' in message
+                                for message in gcmd.messages))
+
     def test_checker_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             obj, _ = self.make(tmp)
