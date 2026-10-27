@@ -15,6 +15,7 @@ is installed, otherwise ffmpeg, otherwise ImageMagick.
 """
 
 import argparse
+import configparser
 import glob
 import io
 import json
@@ -70,18 +71,35 @@ def _expand(path):
     return os.path.expandvars(os.path.expanduser(str(path)))
 
 
+def _as_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text in ('1', 'true', 'yes', 'on')
+
+
+def _parse_list(value):
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [part.strip() for part in str(value).split(',') if part.strip()]
+
+
 def load_config(path):
+    parser = configparser.ConfigParser(interpolation=None)
     try:
         with open(path) as f:
-            user = json.load(f)
+            parser.read_file(f)
     except (IOError, OSError) as e:
         raise ConfigError("unable to read %s: %s" % (path, e))
-    except ValueError as e:
-        raise ConfigError("invalid JSON in %s: %s" % (path, e))
-    if not isinstance(user, dict):
-        raise ConfigError("%s must contain a JSON object" % (path,))
+    except (configparser.Error, UnicodeDecodeError) as e:
+        raise ConfigError("invalid config in %s: %s" % (path, e))
+    section = 'camera'
+    if not parser.has_section(section):
+        raise ConfigError("%s must contain a [camera] section" % (path,))
     config = dict(DEFAULT_CONFIG)
-    config.update(user)
+    config.update(parser.items(section))
     config['data_dir'] = _expand(config.get('data_dir')
                                  or '~/printer_data/bed_clear')
     for key in ('snapshot_url', 'snapshot_command', 'webcam', 'api_key',
@@ -98,8 +116,9 @@ def load_config(path):
         config['min_component_cells'] = int(config['min_component_cells'])
         config['max_changed_fraction'] = float(
             config['max_changed_fraction'])
-        config['decode_size'] = [int(v) for v in config['decode_size']]
-        config['roi'] = [float(v) for v in config['roi']]
+        config['decode_size'] = [int(v) for v in
+                                 _parse_list(config['decode_size'])]
+        config['roi'] = [float(v) for v in _parse_list(config['roi'])]
     except (TypeError, ValueError) as e:
         raise ConfigError("invalid value in %s: %s" % (path, e))
     if (len(config['decode_size']) != 2
@@ -121,7 +140,7 @@ def load_config(path):
         raise ConfigError("max_changed_fraction must be between 0 and 1")
     if not 1 <= config['listen_port'] <= 65535:
         raise ConfigError("listen_port must be between 1 and 65535")
-    config['save_debug'] = bool(config['save_debug'])
+    config['save_debug'] = _as_bool(config['save_debug'], True)
     return config
 
 
@@ -667,8 +686,8 @@ def main():
     parser.add_argument(
         '--config',
         default=os.path.expanduser(
-            '~/printer_data/config/bed_clear_camera.json'),
-        help="path to the camera checker JSON config")
+            '~/printer_data/config/bed_clear_camera.cfg'),
+        help="path to the camera checker config file")
     parser.add_argument('--verbose', action='store_true',
                         help="enable debug logging")
     args = parser.parse_args()

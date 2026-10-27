@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import pathlib
 import tempfile
 import unittest
@@ -106,29 +105,37 @@ class ComponentTest(unittest.TestCase):
 class ConfigTest(unittest.TestCase):
     def test_defaults_and_override(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / 'camera.json'
-            path.write_text(json.dumps({
-                'data_dir': tmp,
-                'roi': [0.1, 0.2, 0.9, 0.8],
-                'min_component_cells': 4,
-            }))
+            path = pathlib.Path(tmp) / 'camera.cfg'
+            path.write_text(
+                "[camera]\n"
+                "data_dir: %s\n"
+                "roi: 0.1, 0.2, 0.9, 0.8\n"
+                "min_component_cells: 4\n" % (tmp,))
             config = checker.load_config(str(path))
             self.assertEqual(config['listen_port'], 7126)
             self.assertEqual(config['min_component_cells'], 4)
             self.assertEqual(config['roi'], [0.1, 0.2, 0.9, 0.8])
+            self.assertEqual(config['decode_size'], [80, 60])
             self.assertEqual(config['data_dir'], tmp)
 
     def test_bad_roi(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / 'camera.json'
-            path.write_text(json.dumps({'roi': [0.5, 0.1, 0.4, 0.9]}))
+            path = pathlib.Path(tmp) / 'camera.cfg'
+            path.write_text("[camera]\nroi: 0.5, 0.1, 0.4, 0.9\n")
             with self.assertRaises(checker.ConfigError):
                 checker.load_config(str(path))
 
-    def test_bad_json(self):
+    def test_bad_config(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / 'camera.json'
-            path.write_text('{nope')
+            path = pathlib.Path(tmp) / 'camera.cfg'
+            path.write_text("[camera\nroi: 0.1, 0.1, 0.9, 0.9\n")
+            with self.assertRaises(checker.ConfigError):
+                checker.load_config(str(path))
+
+    def test_missing_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / 'camera.cfg'
+            path.write_text("[other]\nroi: 0.1, 0.1, 0.9, 0.9\n")
             with self.assertRaises(checker.ConfigError):
                 checker.load_config(str(path))
 

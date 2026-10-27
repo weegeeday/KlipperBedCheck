@@ -42,6 +42,45 @@ service is a single file with no mandatory Python dependencies.
   guarded print is about to start, so a queue can run without a manual check
   between jobs.
 
+## Detection algorithm
+
+Every check is a comparison between two images: the saved empty-bed baseline
+and the new snapshot.
+
+1. **Capture.** The checker fetches one still frame from the snapshot URL or
+   runs `snapshot_command`.
+2. **Decode and shrink.** The frame is converted to grayscale and resized to
+   the `decode_size` grid (80 x 60 by default). Shrinking averages away camera
+   noise and makes the comparison fast in pure Python.
+3. **Crop.** Only the configured `roi` is compared, so the gantry, background,
+   parked toolhead or a status LED cannot trigger the check.
+4. **Normalise each image separately.** Every pixel is replaced by
+   `(value - mean) / max(std, 8)`. This removes global brightness and contrast
+   changes: a cloud passing over the window or a small exposure change does not
+   look like an object. The `8` floor stops a nearly uniform image from
+   amplifying compression noise.
+5. **Difference.** For every grid cell, take the absolute difference between
+   the normalised baseline and the normalised snapshot.
+6. **Threshold.** Cells with a difference above `cell_threshold` (0.35 by
+   default) are marked as changed.
+7. **Group.** Changed cells are grouped into 4-connected blobs using flood
+   fill. The size of the largest blob is the `largest_component`; the largest
+   three blobs are reported as `regions` so you can see where the change is.
+8. **Decide.** The bed is **not clear** when either:
+   - the largest blob is at least `min_component_cells` (6 cells by default),
+     which catches a normal printed part, or
+   - the changed fraction is at least `max_changed_fraction` (25% by default),
+     which catches a large or spread-out change that never forms one blob.
+
+The result also includes `changed_cells`, `changed_fraction`, `max_diff` and
+`mean_diff` for tuning. A clear result means "this looks like the empty-bed
+baseline", not "there is definitely no object anywhere on the plate" - see the
+limitations below.
+
+Because the comparison is normalised, a perfectly uniform global brightness or
+contrast change is ignored. Changing the build sheet changes the surface
+texture and edges, so recalibrate after swapping it.
+
 ## Requirements
 
 - A camera that can return a still snapshot over HTTP, or a command that writes
@@ -79,7 +118,7 @@ The installer copies:
 | `~/klipper/klippy/extras/bed_clear.py` | Klipper extra |
 | `~/printer_data/bed_clear/camera_checker.py` | Checker service |
 | `~/printer_data/config/bed_clear.cfg` | Klipper config |
-| `~/printer_data/config/bed_clear_camera.json` | Camera checker config |
+| `~/printer_data/config/bed_clear_camera.cfg` | Camera checker config |
 | `/etc/systemd/system/bed_clear_camera.service` | Service unit |
 
 If you run it without root it writes the unit next to the config and prints the
@@ -100,44 +139,43 @@ sudo KLIPPER_DIR=/home/pi/klipper CONFIG_DIR=/home/pi/klipper_config \
 
 ## Configure the camera
 
-Open `~/printer_data/config/bed_clear_camera.json`.
+Open `~/printer_data/config/bed_clear_camera.cfg`.
 
 The simplest setup leaves `snapshot_url` empty. The checker then asks Moonraker
 for the webcam list and uses the first webcam:
 
-```json
-{
-  "snapshot_url": "",
-  "moonraker_url": "http://127.0.0.1:7125",
-  "webcam": ""
-}
+```ini
+[camera]
+snapshot_url:
+moonraker_url: http://127.0.0.1:7125
+webcam:
 ```
 
 Set `webcam` to the Moonraker webcam name if there is more than one. If
 Moonraker authentication is enabled, add the API key:
 
-```json
-{
-  "webcam": "bed",
-  "api_key": "YOUR_MOONRAKER_API_KEY"
-}
+```ini
+[camera]
+webcam: bed
+api_key: YOUR_MOONRAKER_API_KEY
 ```
 
 You can also point directly at a snapshot URL:
 
-```json
-{
-  "snapshot_url": "http://127.0.0.1/webcam/?action=snapshot"
-}
+```ini
+[camera]
+snapshot_url: http://127.0.0.1/webcam/?action=snapshot
 ```
 
 Or let a command produce the snapshot on stdout:
 
-```json
-{
-  "snapshot_command": "libcamera-still -o - -t 200 --nopreview --width 640 --height 480"
-}
+```ini
+[camera]
+snapshot_command: libcamera-still -o - -t 200 --nopreview --width 640 --height 480
 ```
+
+The snippets show only the relevant keys; keep them in the single `[camera]`
+section of the file.
 
 `snapshot_command` is run through the shell, so pipes are allowed. It takes
 precedence over `snapshot_url`.
@@ -310,7 +348,11 @@ gcode:
 
 ## Tuning the camera check
 
-All camera settings live in `bed_clear_camera.json`:
+All camera settings live in `bed_clear_camera.cfg`. The only JSON file in the
+project is the Klipper plugin's internal state/metrics file (`bed_clear.json`),
+which you do not edit.
+
+The camera settings are:
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -336,8 +378,9 @@ All camera settings live in `bed_clear_camera.json`:
 The ROI is the part of the image the checker is allowed to look at. Exclude
 background, the gantry and any area where the parked toolhead sits:
 
-```json
-"roi": [0.10, 0.15, 0.90, 0.95]
+```ini
+[camera]
+roi: 0.10, 0.15, 0.90, 0.95
 ```
 
 The coordinates are `[x0, y0, x1, y1]`, with `0,0` at the top-left and `1,1`
@@ -457,7 +500,7 @@ sudo bash install.sh --uninstall
 ```
 
 Then remove `[include bed_clear.cfg]` from `printer.cfg`, delete
-`bed_clear.cfg`, `bed_clear_camera.json`, the checker data directory and the
+`bed_clear.cfg`, `bed_clear_camera.cfg`, the checker data directory and the
 Klipper state file, and restart Klipper.
 
 ## Tests

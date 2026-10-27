@@ -48,13 +48,13 @@ def occupied_bed_image():
 @unittest.skipUnless(PIL_AVAILABLE, "Pillow is needed for the image test")
 class ServiceTest(unittest.TestCase):
     def make_config(self, tmp):
-        path = pathlib.Path(tmp) / 'camera.json'
-        path.write_text(json.dumps({
-            'data_dir': tmp,
-            'decode_size': [80, 60],
-            'roi': [0., 0., 1., 1.],
-            'save_debug': True,
-        }))
+        path = pathlib.Path(tmp) / 'camera.cfg'
+        path.write_text(
+            "[camera]\n"
+            "data_dir: %s\n"
+            "decode_size: 80, 60\n"
+            "roi: 0.0, 0.0, 1.0, 1.0\n"
+            "save_debug: true\n" % (tmp,))
         return checker.load_config(str(path))
 
     def test_calibrate_check_and_reload(self):

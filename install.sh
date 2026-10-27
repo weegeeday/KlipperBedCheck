@@ -66,9 +66,9 @@ if [[ ! -f "$CONFIG_DIR/bed_clear.cfg" ]]; then
 else
     CFG_NOTE="kept existing"
 fi
-if [[ ! -f "$CONFIG_DIR/bed_clear_camera.json" ]]; then
-    install -m 0644 "$HERE/config/bed_clear_camera.json" \
-        "$CONFIG_DIR/bed_clear_camera.json"
+if [[ ! -f "$CONFIG_DIR/bed_clear_camera.cfg" ]]; then
+    install -m 0644 "$HERE/config/bed_clear_camera.cfg" \
+        "$CONFIG_DIR/bed_clear_camera.cfg"
     CAM_NOTE="created"
 else
     CAM_NOTE="kept existing"
@@ -82,7 +82,7 @@ UNIT_TMP="$(mktemp)"
 sed -e "s|__RUN_USER__|$RUN_USER|g" \
     -e "s|__PYTHON__|$PYTHON|g" \
     -e "s|__CHECKER__|$DATA_DIR/camera_checker.py|g" \
-    -e "s|__CAMERA_CONFIG__|$CONFIG_DIR/bed_clear_camera.json|g" \
+    -e "s|__CAMERA_CONFIG__|$CONFIG_DIR/bed_clear_camera.cfg|g" \
     -e "s|__DATA_DIR__|$DATA_DIR|g" \
     "$HERE/systemd/bed_clear_camera.service.in" > "$UNIT_TMP"
 
@@ -90,7 +90,7 @@ echo "Installed:"
 echo "  $EXTRAS_DIR/bed_clear.py"
 echo "  $DATA_DIR/camera_checker.py"
 echo "  $CONFIG_DIR/bed_clear.cfg ($CFG_NOTE)"
-echo "  $CONFIG_DIR/bed_clear_camera.json ($CAM_NOTE)"
+echo "  $CONFIG_DIR/bed_clear_camera.cfg ($CAM_NOTE)"
 
 if [[ $EUID -eq 0 ]]; then
     install -m 0644 "$UNIT_TMP" "$UNIT_PATH"
@@ -132,7 +132,7 @@ fi
 
 echo
 echo "Next:"
-echo "  1. Set snapshot_url (or webcam name) in $CONFIG_DIR/bed_clear_camera.json"
+echo "  1. Set snapshot_url (or webcam name) in $CONFIG_DIR/bed_clear_camera.cfg"
 echo "  2. Add [include bed_clear.cfg] to printer.cfg"
 echo "  3. Restart Klipper and the checker service"
 echo "  4. Empty the bed, then run BED_CLEAR_CALIBRATE"
