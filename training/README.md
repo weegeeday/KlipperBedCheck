@@ -45,6 +45,27 @@ prints, purge lines and multiple arrangements.
 Target at least 20–30 unique images per class before calling a result
 meaningful, and preferably hundreds across several sessions.
 
+## Inspecting the ROI
+
+Before training, check that the ROI actually covers the bed:
+
+```bash
+python training/show_roi.py --roi 0.03,0.52,0.85,0.99 --count 6
+```
+
+It opens a window with six random frames, a red ROI rectangle, and an inset of
+the cropped region the model will see.
+
+Useful options:
+
+- `--label clear` or `--label not_clear` to sample one class
+- `--seed 42` for a reproducible sample
+- `--save roi.jpg` to keep the preview
+- `--no-show` for a headless/SSH session; it saves
+  `training/reports/roi_preview.jpg` instead
+
+Use the same ROI in `train.py --roi ...` and in the deployment checker.
+
 ## 2. Train locally
 
 ```bash
