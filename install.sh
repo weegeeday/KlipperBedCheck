@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Klipper bed_clear extra, the camera checker service and configs.
+# Install the Klipper bed_clear extra, the camera checker venv and the service.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,54 +9,95 @@ RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 KLIPPER_DIR="${KLIPPER_DIR:-$RUN_HOME/klipper}"
 CONFIG_DIR="${CONFIG_DIR:-$RUN_HOME/printer_data/config}"
 DATA_DIR="${DATA_DIR:-$RUN_HOME/printer_data/bed_clear}"
-PYTHON="${PYTHON:-$(command -v python3 || true)}"
+BASE_PYTHON="${PYTHON:-$(command -v python3 || true)}"
+VENV_DIR="${VENV_DIR:-$DATA_DIR/venv}"
+VENV_PYTHON="$VENV_DIR/bin/python"
 EXTRAS_DIR="$KLIPPER_DIR/klippy/extras"
 
 SERVICE_NAME="bed_clear_camera"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
+REQUIREMENTS="$HERE/requirements-checker.txt"
+
+if [[ "${1:-}" == "--uninstall" ]]; then
+    shift
+    exec bash "$HERE/uninstall.sh" "$@"
+fi
 
 if [[ -z "$RUN_HOME" ]]; then
     echo "Could not determine the home directory for user $RUN_USER" >&2
     exit 1
 fi
-
-if [[ "${1:-}" == "--uninstall" ]]; then
-    rm -f "$EXTRAS_DIR/bed_clear.py"
-    rm -f "$DATA_DIR/camera_checker.py"
-    if [[ $EUID -eq 0 ]]; then
-        systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
-        rm -f "$UNIT_PATH"
-        systemctl daemon-reload 2>/dev/null || true
-        echo "Service removed."
-    else
-        echo "Run these as root to remove the service:"
-        echo "  sudo systemctl disable --now $SERVICE_NAME"
-        echo "  sudo rm -f $UNIT_PATH"
-        echo "  sudo systemctl daemon-reload"
-    fi
-    echo "Removed the Klipper extra and checker."
-    echo "Configs, baseline and state were kept in $CONFIG_DIR and $DATA_DIR."
-    exit 0
+if [[ -z "$DATA_DIR" || "$DATA_DIR" == "/" ]]; then
+    echo "Refusing to use DATA_DIR=$DATA_DIR" >&2
+    exit 1
 fi
-
+if [[ -z "$VENV_DIR" || "$VENV_DIR" == "/" ]]; then
+    echo "Refusing to use VENV_DIR=$VENV_DIR" >&2
+    exit 1
+fi
 if [[ ! -d "$EXTRAS_DIR" ]]; then
     echo "Klipper not found at $KLIPPER_DIR" >&2
     echo "Set KLIPPER_DIR, for example:" >&2
-    echo "  KLIPPER_DIR=/home/pi/klipper bash install.sh" >&2
+    echo "  KLIPPER_DIR=/home/pi/klipper sudo bash install.sh" >&2
     exit 1
 fi
 if [[ ! -d "$CONFIG_DIR" ]]; then
     echo "Config directory not found at $CONFIG_DIR" >&2
     echo "Set CONFIG_DIR, for example:" >&2
-    echo "  CONFIG_DIR=/home/pi/klipper_config bash install.sh" >&2
+    echo "  CONFIG_DIR=/home/pi/klipper_config sudo bash install.sh" >&2
     exit 1
 fi
-if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
+if [[ -z "$BASE_PYTHON" || ! -x "$BASE_PYTHON" ]]; then
     echo "python3 not found; set PYTHON=/path/to/python3" >&2
     exit 1
 fi
+if [[ ! -f "$REQUIREMENTS" ]]; then
+    echo "Missing $REQUIREMENTS" >&2
+    exit 1
+fi
 
-install -d -m 0755 "$DATA_DIR"
+# Create the data directory first so the venv can live inside it.
+if [[ $EUID -eq 0 ]]; then
+    install -d -m 0755 "$DATA_DIR"
+    chown "$RUN_USER" "$DATA_DIR"
+else
+    install -d -m 0755 "$DATA_DIR"
+fi
+
+if [[ -e "$VENV_DIR" && ! -x "$VENV_PYTHON" ]]; then
+    echo "$VENV_DIR exists but is not a usable virtual environment." >&2
+    echo "Move it aside or set VENV_DIR to a new path." >&2
+    exit 1
+fi
+if [[ ! -x "$VENV_PYTHON" ]]; then
+    echo "Creating virtual environment at $VENV_DIR"
+    if ! "$BASE_PYTHON" -m venv "$VENV_DIR"; then
+        echo "Could not create a virtual environment." >&2
+        echo "On Raspberry Pi OS install the venv package:" >&2
+        echo "  sudo apt install python3-venv" >&2
+        exit 1
+    fi
+fi
+if [[ $EUID -eq 0 ]]; then
+    chown -R "$RUN_USER" "$VENV_DIR"
+fi
+
+"$VENV_PYTHON" -m pip install --disable-pip-version-check \
+    --no-cache-dir --upgrade pip >/dev/null 2>&1 || true
+if ! "$VENV_PYTHON" -m pip install --disable-pip-version-check \
+        --no-cache-dir -r "$REQUIREMENTS"; then
+    echo "WARNING: full checker dependency install failed." >&2
+    if ! "$VENV_PYTHON" -m pip install --disable-pip-version-check \
+            --no-cache-dir "Pillow>=9.0" "numpy>=1.21"; then
+        echo "ERROR: Pillow/numpy could not be installed." >&2
+        echo "The checker needs an image decoder." >&2
+        echo "Install python3-pil or ffmpeg." >&2
+    fi
+fi
+if [[ $EUID -eq 0 ]]; then
+    chown -R "$RUN_USER" "$VENV_DIR"
+fi
+
 install -m 0644 "$HERE/bed_clear.py" "$EXTRAS_DIR/bed_clear.py"
 install -m 0755 "$HERE/camera_checker.py" "$DATA_DIR/camera_checker.py"
 
@@ -78,33 +119,45 @@ if [[ $EUID -eq 0 ]]; then
     chown -R "$RUN_USER" "$DATA_DIR"
 fi
 
+# Validate the config and load the model before replacing a running service.
+if ! CHECK_OUTPUT="$("$VENV_PYTHON" "$DATA_DIR/camera_checker.py" \
+        --config "$CONFIG_DIR/bed_clear_camera.cfg" --check-config 2>&1)"; then
+    echo "$CHECK_OUTPUT" >&2
+    echo "Checker config validation failed; service not (re)installed." >&2
+    echo "Fix bed_clear_camera.cfg or the model files and re-run install.sh." >&2
+    exit 1
+fi
+echo "Checker config: OK"
+
 UNIT_TMP="$(mktemp)"
+trap 'rm -f "$UNIT_TMP"' EXIT
 sed -e "s|__RUN_USER__|$RUN_USER|g" \
-    -e "s|__PYTHON__|$PYTHON|g" \
+    -e "s|__PYTHON__|$VENV_PYTHON|g" \
+    -e "s|__DATA_DIR__|$DATA_DIR|g" \
     -e "s|__CHECKER__|$DATA_DIR/camera_checker.py|g" \
     -e "s|__CAMERA_CONFIG__|$CONFIG_DIR/bed_clear_camera.cfg|g" \
-    -e "s|__DATA_DIR__|$DATA_DIR|g" \
     "$HERE/systemd/bed_clear_camera.service.in" > "$UNIT_TMP"
 
 echo "Installed:"
 echo "  $EXTRAS_DIR/bed_clear.py"
 echo "  $DATA_DIR/camera_checker.py"
+echo "  $VENV_DIR (checker virtual environment)"
 echo "  $CONFIG_DIR/bed_clear.cfg ($CFG_NOTE)"
 echo "  $CONFIG_DIR/bed_clear_camera.cfg ($CAM_NOTE)"
 
 if [[ $EUID -eq 0 ]]; then
     install -m 0644 "$UNIT_TMP" "$UNIT_PATH"
-    rm -f "$UNIT_TMP"
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
-    if systemctl restart "$SERVICE_NAME"; then
-        echo "  $UNIT_PATH (started)"
+    if systemctl restart "$SERVICE_NAME" \
+            && systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo "  $UNIT_PATH (running)"
     else
-        echo "  $UNIT_PATH (failed to start; check journalctl -u $SERVICE_NAME)"
+        echo "  $UNIT_PATH (failed to start)" >&2
+        echo "  journalctl -u $SERVICE_NAME -n 50 --no-pager" >&2
     fi
 else
     install -m 0644 "$UNIT_TMP" "$CONFIG_DIR/$SERVICE_NAME.service"
-    rm -f "$UNIT_TMP"
     echo "  $CONFIG_DIR/$SERVICE_NAME.service"
     echo
     echo "Run these as root to enable the checker service:"
@@ -113,29 +166,21 @@ else
     echo "  sudo systemctl enable --now $SERVICE_NAME"
 fi
 
-if "$PYTHON" -c 'import PIL' 2>/dev/null; then
-    echo
-    echo "Image decoder: Pillow"
+if "$VENV_PYTHON" -c 'import PIL' 2>/dev/null; then
+    echo "Image decoder: Pillow (venv)"
 elif command -v ffmpeg >/dev/null 2>&1; then
-    echo
-    echo "Image decoder: ffmpeg"
-elif command -v convert >/dev/null 2>&1; then
-    echo
-    echo "Image decoder: ImageMagick"
+    echo "Image decoder: ffmpeg (system binary)"
 else
-    echo
-    echo "WARNING: no image decoder found."
-    echo "Install one of:"
-    echo "  sudo apt install python3-pil"
-    echo "  sudo apt install ffmpeg"
+    echo "WARNING: no image decoder found." >&2
+    echo "  $VENV_PYTHON -m pip install Pillow" >&2
+    echo "  or: sudo apt install ffmpeg" >&2
 fi
 
-if "$PYTHON" -c 'import onnxruntime' 2>/dev/null; then
-    echo "Model backend: onnxruntime available"
+if "$VENV_PYTHON" -c 'import onnxruntime' 2>/dev/null; then
+    echo "Model backend: onnxruntime available (venv)"
 else
-    echo
-    echo "Model backend (optional): onnxruntime is not installed."
-    echo "  $PYTHON -m pip install onnxruntime"
+    echo "Model backend (optional): onnxruntime is not available in the venv."
+    echo "  $VENV_PYTHON -m pip install onnxruntime"
     echo "Without it the checker still works in diff mode."
 fi
 

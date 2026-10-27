@@ -101,10 +101,11 @@ scp training/runs/run1/model.onnx pi@printer:~/printer_data/bed_clear/model.onnx
 scp training/runs/run1/config.json pi@printer:~/printer_data/bed_clear/model_config.json
 ```
 
-Install ONNX Runtime in the Python environment that runs the checker:
+The installer already installs ONNX Runtime into the checker venv. If you need
+to add it later:
 
 ```bash
-python3 -m pip install onnxruntime
+~/printer_data/bed_clear/venv/bin/pip install onnxruntime
 ```
 
 Then set the backend in `bed_clear_camera.cfg`:
@@ -135,8 +136,9 @@ and `threshold`. A model that fails to load is reported in
 - An image decoder on the host: **Pillow** (`python3-pil`), **ffmpeg**, or
   ImageMagick. The install script checks for one.
 - For the optional model backend: **Pillow**, **numpy** and
-  **ONNX Runtime** (`pip install onnxruntime`). The diff backend does not need
-  them.
+  **ONNX Runtime**. The installer puts these in
+  `~/printer_data/bed_clear/venv` (see `requirements-checker.txt`). The diff
+  backend works without ONNX Runtime.
 - Klipper with the standard `virtual_sdcard` / `print_stats` support. This is
   what Moonraker and Mainsail use.
 - `block_print_start` needs a Klipper version that allows chaining gcode
@@ -166,12 +168,18 @@ The installer copies:
 | --- | --- |
 | `~/klipper/klippy/extras/bed_clear.py` | Klipper extra |
 | `~/printer_data/bed_clear/camera_checker.py` | Checker service |
+| `~/printer_data/bed_clear/venv` | Checker virtual environment |
 | `~/printer_data/config/bed_clear.cfg` | Klipper config |
 | `~/printer_data/config/bed_clear_camera.cfg` | Camera checker config |
 | `/etc/systemd/system/bed_clear_camera.service` | Service unit |
 
-If you run it without root it writes the unit next to the config and prints the
-`sudo` commands instead.
+The checker always runs from its own virtual environment. The installer never
+uses system `pip`, so PEP 668 / "externally-managed-environment" does not
+apply. It installs the packages from `requirements-checker.txt` into the venv.
+Override the location with `VENV_DIR=/path/to/venv` if needed.
+
+If you run the installer without root it writes the unit next to the config and
+prints the `sudo` commands instead.
 
 Then add this to `printer.cfg` and restart Klipper:
 
@@ -532,6 +540,28 @@ the checker does not silently fall back to diff.
 **"no camera baseline" in `both` mode** - Run `BED_CLEAR_CALIBRATE` with an
 empty bed. `model` mode does not need a baseline.
 
+**`externally-managed-environment` / PEP 668** - Do not use system
+`python3 -m pip`. The checker runs from
+`~/printer_data/bed_clear/venv`. Install into that venv:
+
+```bash
+~/printer_data/bed_clear/venv/bin/pip install onnxruntime
+```
+
+or re-run `sudo bash install.sh`, which installs `requirements-checker.txt`
+into the venv.
+
+If an older install failed partway through, reset it from the repo checkout:
+
+```bash
+cd ~/KlipperBedCheck
+git pull
+sudo bash uninstall.sh          # keeps configs, model and data
+sudo bash install.sh
+```
+
+Use `sudo bash uninstall.sh --purge` for a completely clean removal.
+
 **"unable to decode camera snapshot"** - Install Pillow or ffmpeg:
 
 ```bash
@@ -578,13 +608,28 @@ The camera baseline and debug images are in the checker's `data_dir`
 
 ## Uninstall
 
+Remove the service, Klipper extra, checker and venv while keeping configs,
+model and data:
+
 ```bash
-sudo bash install.sh --uninstall
+sudo bash uninstall.sh
 ```
 
-Then remove `[include bed_clear.cfg]` from `printer.cfg`, delete
-`bed_clear.cfg`, `bed_clear_camera.cfg`, the checker data directory and the
-Klipper state file, and restart Klipper.
+Remove everything, including configs, model, baseline, state and debug data:
+
+```bash
+sudo bash uninstall.sh --purge
+```
+
+Preview first with:
+
+```bash
+sudo bash uninstall.sh --dry-run
+```
+
+Then remove `[include bed_clear.cfg]` from `printer.cfg` and restart Klipper.
+`uninstall.sh` is safe to run against a partial or failed install: missing
+files and services are ignored.
 
 ## Model training
 

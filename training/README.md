@@ -175,12 +175,13 @@ scp training/runs/run1/config.json \
   pi@printer:~/printer_data/bed_clear/model_config.json
 ```
 
-ONNX Runtime is only needed on the printer, not for training. Install it in
-the Python environment that runs the checker (the same `PYTHON` used by the
-systemd unit):
+ONNX Runtime is only needed on the printer, not for training. The installer
+creates the checker venv and installs `requirements-checker.txt` into it. To
+add ONNX Runtime later, use the venv's pip (never system pip on PEP 668
+systems):
 
 ```bash
-python3 -m pip install onnxruntime
+~/printer_data/bed_clear/venv/bin/pip install onnxruntime
 ```
 
 Then edit `~/printer_data/config/bed_clear_camera.cfg`:

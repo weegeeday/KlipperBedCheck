@@ -11,6 +11,24 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=__PYTHON__ __CHECKER__ --config __CAMERA_CONFIG__
 Restart=always
 RestartSec=5
+TimeoutStopSec=10
+
+# Hardening. The checker only needs HTTP/Unix sockets and its own data dir.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=__DATA_DIR__
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

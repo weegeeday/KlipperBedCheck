@@ -509,6 +509,12 @@ class ModelChecker:
             if not self.config_path or not os.path.isfile(self.config_path):
                 raise ModelError("model config not found: %s"
                                  % (self.config_path or '(unset)',))
+            try:
+                import numpy  # noqa: F401
+                from PIL import Image  # noqa: F401
+            except ImportError as e:
+                raise ModelError("Pillow and numpy are required for the model "
+                                 "backend: %s" % (e,))
             with open(self.config_path) as f:
                 meta = json.load(f)
             classes = meta.get('classes') or []
@@ -946,6 +952,8 @@ def main():
         help="path to the camera checker config file")
     parser.add_argument('--verbose', action='store_true',
                         help="enable debug logging")
+    parser.add_argument('--check-config', action='store_true',
+                        help="validate the config and model, then exit")
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -960,6 +968,14 @@ def main():
     except OSError as e:
         logging.error("unable to prepare data directory: %s", e)
         return 1
+    if args.check_config:
+        status = checker.status()
+        print(json.dumps(status, indent=2, sort_keys=True))
+        model = status.get('model') or {}
+        if (status.get('backend') in ('model', 'both')
+                and not model.get('loaded')):
+            return 1
+        return 0
     CheckerHandler.checker = checker
     address = (config['listen_host'], config['listen_port'])
     try:
