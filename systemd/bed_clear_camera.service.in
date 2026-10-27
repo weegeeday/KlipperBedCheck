@@ -1,0 +1,16 @@
+[Unit]
+Description=Bed Clear camera checker
+After=network-online.target moonraker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+WorkingDirectory=__DATA_DIR__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__PYTHON__ __CHECKER__ --config __CAMERA_CONFIG__
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
