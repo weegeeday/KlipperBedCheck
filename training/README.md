@@ -164,6 +164,51 @@ Once the model is acceptable, deploy the ONNX model through the checker
 service. Keep the image-diff result as a fallback: if the diff shows a large
 change, do not allow a `clear` prediction to override it.
 
+## 5. Deploy to the checker
+
+No model is included in this repository; deploy the run you trained.
+
+```bash
+scp training/runs/run1/model.onnx \
+  pi@printer:~/printer_data/bed_clear/model.onnx
+scp training/runs/run1/config.json \
+  pi@printer:~/printer_data/bed_clear/model_config.json
+```
+
+ONNX Runtime is only needed on the printer, not for training. Install it in
+the Python environment that runs the checker (the same `PYTHON` used by the
+systemd unit):
+
+```bash
+python3 -m pip install onnxruntime
+```
+
+Then edit `~/printer_data/config/bed_clear_camera.cfg`:
+
+```ini
+[camera]
+backend: both
+```
+
+`both` requires the diff and the model to agree that the bed is clear. If you
+use `both`, run `BED_CLEAR_CALIBRATE` once for the diff baseline. `model` mode
+does not need a baseline.
+
+Check the `threshold` in the run's `config.json`. Current training runs export
+`0.5`. If you are deploying an older run whose config says `0.98`, either
+retrain with the current script or add `model_threshold: 0.5` to
+`bed_clear_camera.cfg`.
+
+Restart the checker and verify that the model loaded:
+
+```bash
+sudo systemctl restart bed_clear_camera
+curl -s http://127.0.0.1:7126/status | jq '.model'
+```
+
+In Klipper, `BED_CLEAR_STATUS` shows the backend, model state and the last
+`p(not_clear)`.
+
 ## Model run notes
 
 The current model uses 146,130 parameters and exports a 588 KB ONNX file. The
@@ -198,8 +243,11 @@ evaluation.
 
 ## Current limitation
 
-The camera frames inspected so far show the toolhead filling most of the frame
-and the bed in a thin strip at the bottom. That is a poor view for occupancy
-detection. Before collecting more, adjust the camera angle or set a tight ROI
-around the visible bed. The training script supports `--roi`, but the model
-cannot see what the camera does not show.
+The current ROI (`0.2891, 0.5501, 0.9964, 0.9242`) excludes most of the toolhead
+and shows the bed clearly. Keep the camera fixed and use the same ROI for
+training and deployment. If the camera moves, redraw the ROI with
+`training/draw_roi.py` and retrain.
+
+The model still cannot see what the camera does not show: an object hidden
+behind the gantry or outside the ROI is invisible. Use a separate session/day
+for the final accuracy check.

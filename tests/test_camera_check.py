@@ -136,6 +136,21 @@ BLOCKED_RESULT = {
     'regions': [{'cells': 30, 'box': [0.2, 0.3, 0.5, 0.6]}],
 }
 
+MODEL_RESULT = {
+    'clear': False,
+    'reason': 'model p(not_clear)=0.930 >= threshold 0.500',
+    'backend': 'model',
+    'probability': 0.93,
+    'threshold': 0.5,
+}
+
+BOTH_CLEAR = {
+    **CLEAR_RESULT,
+    'backend': 'both',
+    'probability': 0.02,
+    'threshold': 0.5,
+}
+
 
 class CameraCheckTest(unittest.TestCase):
     def make(self, tmp, values=None):
@@ -186,6 +201,32 @@ class CameraCheckTest(unittest.TestCase):
             self.assertFalse(obj.get_status(0.)['clear'])
             with self.assertRaises(RuntimeError):
                 obj._require_start_allowed(FakeGcmd())
+
+    def test_model_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            obj, _ = self.make(tmp)
+            self.fake_request(obj, MODEL_RESULT)
+            with self.assertRaises(RuntimeError):
+                obj.cmd_BED_CLEAR_CHECK(FakeGcmd())
+            self.assertEqual(obj.state, 'blocked')
+            status = obj.get_status(0.)
+            self.assertEqual(status['backend'], 'model')
+            self.assertAlmostEqual(status['probability'], 0.93)
+            self.assertAlmostEqual(status['threshold'], 0.5)
+            self.assertIn('p(not_clear)=0.930', obj._summary())
+
+    def test_both_backend_clear_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            obj, _ = self.make(tmp)
+            self.fake_request(obj, BOTH_CLEAR)
+            obj.cmd_BED_CLEAR_CHECK(FakeGcmd())
+            self.assertEqual(obj.state, 'clear')
+            status = obj.get_status(0.)
+            self.assertEqual(status['backend'], 'both')
+            self.assertAlmostEqual(status['probability'], 0.02)
+            summary = obj._summary()
+            self.assertIn('p(not_clear)=0.020', summary)
+            self.assertIn('changed cells', summary)
 
     def test_checker_error(self):
         with tempfile.TemporaryDirectory() as tmp:

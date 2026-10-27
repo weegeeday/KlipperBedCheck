@@ -183,6 +183,9 @@ class BedClear:
             'max_diff': self._as_float(result.get('max_diff')),
             'mean_diff': self._as_float(result.get('mean_diff')),
             'regions': regions,
+            'backend': str(result.get('backend') or ''),
+            'probability': self._as_float(result.get('probability'), -1.),
+            'threshold': self._as_float(result.get('threshold')),
         }
 
     def _save_data(self):
@@ -325,8 +328,19 @@ class BedClear:
         cells = self._as_int(self.metrics.get('changed_cells'))
         largest = self._as_int(self.metrics.get('largest_component'))
         max_diff = self._as_float(self.metrics.get('max_diff'))
-        return ("%d changed cells (%.2f%%), largest region %d cells, "
-                "max diff %.2f" % (cells, fraction * 100., largest, max_diff))
+        diff_summary = ("%d changed cells (%.2f%%), largest region %d cells, "
+                        "max diff %.2f"
+                        % (cells, fraction * 100., largest, max_diff))
+        backend = str(self.metrics.get('backend') or '')
+        probability = self._as_float(self.metrics.get('probability'), -1.)
+        threshold = self._as_float(self.metrics.get('threshold'))
+        if backend in ('model', 'both') and probability >= 0.:
+            model_summary = ("p(not_clear)=%.3f (threshold %.3f)"
+                             % (probability, threshold))
+            if backend == 'both':
+                return "%s, %s" % (model_summary, diff_summary)
+            return model_summary
+        return diff_summary
 
     # Commands
 
@@ -467,9 +481,30 @@ class BedClear:
                 lines.append("  checker status: offline (%s)"
                              % (status['error'],))
             else:
-                baseline = "yes" if status.get('baseline') else "no"
-                lines.append("  checker status: online, baseline=%s"
-                             % (baseline,))
+                backend = status.get('backend')
+                if backend == 'model':
+                    lines.append("  checker status: online")
+                else:
+                    baseline = "yes" if status.get('baseline') else "no"
+                    lines.append("  checker status: online, baseline=%s"
+                                 % (baseline,))
+                if backend:
+                    lines.append("  backend: %s" % (backend,))
+                model = status.get('model')
+                if isinstance(model, dict) and model:
+                    if model.get('loaded'):
+                        size = model.get('size') or []
+                        size_text = (" %dx%d" % (size[0], size[1])
+                                     if len(size) == 2 else "")
+                        threshold = self._as_float(
+                            model.get('threshold'))
+                        lines.append(
+                            "  model: loaded, threshold %.3f%s"
+                            % (threshold, size_text))
+                    else:
+                        lines.append(
+                            "  model: NOT LOADED (%s)"
+                            % (model.get('error') or 'unknown',))
         if self.print_in_progress:
             lines.append("  a print is in progress")
         if self.max_age > 0.:
@@ -596,6 +631,10 @@ class BedClear:
             'max_diff': self._as_float(self.metrics.get('max_diff')),
             'mean_diff': self._as_float(self.metrics.get('mean_diff')),
             'regions': list(self.metrics.get('regions', [])),
+            'backend': str(self.metrics.get('backend') or ''),
+            'probability': self._as_float(
+                self.metrics.get('probability'), -1.),
+            'threshold': self._as_float(self.metrics.get('threshold')),
             'checker_url': self.checker_url,
             'max_age': self.max_age,
             'block_print_start': self.block_print_start,

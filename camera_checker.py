@@ -48,7 +48,13 @@ DEFAULT_CONFIG = {
     'snapshot_timeout': 10.0,
     'save_debug': True,
     'token': '',
+    'backend': 'diff',
+    'model_path': '~/printer_data/bed_clear/model.onnx',
+    'model_config': '~/printer_data/bed_clear/model_config.json',
+    'model_threshold': None,
 }
+
+BACKENDS = ('diff', 'model', 'both')
 
 
 class ConfigError(Exception):
@@ -64,6 +70,10 @@ class DecodeError(Exception):
 
 
 class NoBaseline(Exception):
+    pass
+
+
+class ModelError(Exception):
     pass
 
 
@@ -109,6 +119,22 @@ def load_config(path):
         config.get('moonraker_url') or 'http://127.0.0.1:7125').rstrip('/')
     config['listen_host'] = str(
         config.get('listen_host') or '127.0.0.1').strip()
+    config['backend'] = str(config.get('backend') or 'diff').strip().lower()
+    if config['backend'] not in BACKENDS:
+        raise ConfigError("backend must be one of: %s"
+                          % (', '.join(BACKENDS),))
+    config['model_path'] = _expand(config.get('model_path') or '')
+    config['model_config'] = _expand(config.get('model_config') or '')
+    model_threshold = config.get('model_threshold')
+    if model_threshold in (None, ''):
+        config['model_threshold'] = None
+    else:
+        try:
+            config['model_threshold'] = float(model_threshold)
+        except (TypeError, ValueError):
+            raise ConfigError("model_threshold must be a number")
+        if not 0. <= config['model_threshold'] <= 1.:
+            raise ConfigError("model_threshold must be between 0 and 1")
     try:
         config['listen_port'] = int(config['listen_port'])
         config['snapshot_timeout'] = float(config['snapshot_timeout'])
@@ -448,15 +474,175 @@ class SnapshotSource:
         return data
 
 
+def crop_roi_image(image, roi):
+    width, height = image.size
+    x0 = max(0, min(width - 1, int(round(roi[0] * width))))
+    y0 = max(0, min(height - 1, int(round(roi[1] * height))))
+    x1 = max(x0 + 1, min(width, int(round(roi[2] * width))))
+    y1 = max(y0 + 1, min(height, int(round(roi[3] * height))))
+    return image.crop((x0, y0, x1, y1))
+
+
+class ModelChecker:
+    def __init__(self, config):
+        self.config = config
+        self.path = config.get('model_path') or ''
+        self.config_path = config.get('model_config') or ''
+        self.session = None
+        self.input_name = None
+        self.classes = []
+        self.not_clear_index = 1
+        self.threshold = 0.5
+        self.threshold_override = config.get('model_threshold')
+        self.roi = tuple(config['roi'])
+        self.size = tuple(config['decode_size'])
+        self.mean = 0.5
+        self.std = 0.5
+        self.error = None
+        self._load()
+
+    def _load(self):
+        try:
+            if not self.path or not os.path.isfile(self.path):
+                raise ModelError("model file not found: %s"
+                                 % (self.path or '(unset)',))
+            if not self.config_path or not os.path.isfile(self.config_path):
+                raise ModelError("model config not found: %s"
+                                 % (self.config_path or '(unset)',))
+            with open(self.config_path) as f:
+                meta = json.load(f)
+            classes = meta.get('classes') or []
+            if len(classes) != 2 or 'not_clear' not in classes:
+                raise ModelError("model config must contain two classes "
+                                 "including not_clear")
+            self.classes = [str(name) for name in classes]
+            self.not_clear_index = self.classes.index('not_clear')
+            image_meta = meta.get('image') or {}
+            roi = image_meta.get('roi')
+            if roi:
+                if (len(roi) != 4
+                        or not 0. <= roi[0] < roi[2] <= 1.
+                        or not 0. <= roi[1] < roi[3] <= 1.):
+                    raise ModelError("invalid roi in model config")
+                self.roi = tuple(float(value) for value in roi)
+            size = image_meta.get('size')
+            if size:
+                if len(size) != 2 or min(size) < 1:
+                    raise ModelError("invalid image size in model config")
+                self.size = (int(size[0]), int(size[1]))
+            if int(image_meta.get('channels', 1)) != 1:
+                raise ModelError("only single-channel grayscale models are "
+                                 "supported")
+            mean = image_meta.get('normalize_mean', [0.5])
+            std = image_meta.get('normalize_std', [0.5])
+            if not isinstance(mean, (list, tuple)) or len(mean) != 1:
+                raise ModelError("model normalization must be grayscale")
+            if not isinstance(std, (list, tuple)) or len(std) != 1:
+                raise ModelError("model normalization must be grayscale")
+            self.mean = float(mean[0])
+            self.std = float(std[0])
+            if self.std == 0.:
+                raise ModelError("model normalization std must not be zero")
+            threshold = self.threshold_override
+            if threshold is None:
+                threshold = meta.get('threshold', 0.5)
+            self.threshold = float(threshold)
+            if not 0. <= self.threshold <= 1.:
+                raise ModelError("model threshold must be between 0 and 1")
+            if self.threshold > 0.9:
+                logging.warning(
+                    "model threshold %.3f is high; this can miss not-clear "
+                    "frames. Consider model_threshold: 0.5", self.threshold)
+            import onnxruntime as ort
+            self.session = ort.InferenceSession(
+                self.path, providers=['CPUExecutionProvider'])
+            inputs = self.session.get_inputs()
+            if not inputs:
+                raise ModelError("ONNX model has no inputs")
+            self.input_name = inputs[0].name
+            logging.info("loaded model %s (threshold %.3f, input %dx%d)",
+                         self.path, self.threshold,
+                         self.size[0], self.size[1])
+        except Exception as e:
+            self.session = None
+            self.error = str(e)
+            logging.warning("model backend unavailable: %s", e)
+
+    def status(self):
+        return {
+            'loaded': self.session is not None,
+            'error': self.error,
+            'path': self.path,
+            'config': self.config_path,
+            'threshold': self.threshold,
+            'roi': list(self.roi),
+            'size': list(self.size),
+            'classes': self.classes,
+        }
+
+    def _tensor(self, data):
+        try:
+            from PIL import Image
+            import numpy as np
+        except ImportError as e:
+            raise ModelError("Pillow and numpy are required for the model "
+                             "backend: %s" % (e,))
+        try:
+            image = Image.open(io.BytesIO(data)).convert('L')
+        except Exception as e:
+            raise ModelError("could not decode snapshot for model: %s" % (e,))
+        image = crop_roi_image(image, self.roi)
+        image = image.resize(self.size, Image.BILINEAR)
+        array = np.asarray(image, dtype=np.float32) / 255.
+        array = (array - self.mean) / self.std
+        return array[None, None, :, :]
+
+    def check(self, data):
+        if self.session is None:
+            raise ModelError(self.error or "model is not loaded")
+        try:
+            import numpy as np
+            tensor = self._tensor(data)
+            outputs = self.session.run(None, {self.input_name: tensor})
+            logits = np.asarray(outputs[0], dtype=np.float64)
+            if logits.ndim != 2 or logits.shape[1] != 2:
+                raise ModelError("ONNX model must return two logits; got %s"
+                                 % (logits.shape,))
+            values = logits[0]
+            values = np.exp(values - np.max(values))
+            probabilities = values / values.sum()
+            probability = float(probabilities[self.not_clear_index])
+        except ModelError:
+            raise
+        except Exception as e:
+            raise ModelError("model inference failed: %s" % (e,))
+        threshold = self.threshold
+        clear = probability < threshold
+        reason = ("model p(not_clear)=%.3f %s threshold %.3f"
+                  % (probability, '<' if clear else '>=', threshold))
+        return {
+            'clear': clear,
+            'reason': reason,
+            'backend': 'model',
+            'probability': probability,
+            'threshold': threshold,
+            'model': {'path': self.path, 'classes': self.classes},
+        }
+
+
 class BedClearChecker:
     def __init__(self, config):
         self.config = config
         self.source = SnapshotSource(config)
         self.decoder = ImageDecoder(*config['decode_size'])
+        self.backend = config['backend']
         self.lock = threading.Lock()
         self.baseline = None
         self.last = None
+        self.model = None
         os.makedirs(config['data_dir'], exist_ok=True)
+        if self.backend in ('model', 'both'):
+            self.model = ModelChecker(config)
         self._load_baseline()
 
     def _data_path(self, name):
@@ -525,31 +711,87 @@ class BedClearChecker:
                 'pixels': len(pixels),
             }
 
+    def _run_diff(self, data):
+        roi = (self.model.roi
+               if self.backend == 'both' and self.model is not None
+               else self.config['roi'])
+        current = self.decoder.decode(data)
+        result = analyse(
+            self.baseline['pixels'], current,
+            self.config['decode_size'][0], self.config['decode_size'][1],
+            roi,
+            self.config['cell_threshold'],
+            self.config['min_component_cells'],
+            self.config['max_changed_fraction'])
+        diff = result.pop('_diff')
+        diff_width = result.pop('_diff_width')
+        diff_height = result.pop('_diff_height')
+        result['backend'] = 'diff'
+        return result, diff, diff_width, diff_height
+
+    def _run_model(self, data):
+        if self.model is None:
+            raise ModelError("model backend is not configured")
+        return self.model.check(data)
+
+    @staticmethod
+    def _combine(diff_result, model_result):
+        result = dict(diff_result)
+        result['backend'] = 'both'
+        result['model_clear'] = model_result['clear']
+        result['model_reason'] = model_result['reason']
+        result['probability'] = model_result.get('probability')
+        result['threshold'] = model_result.get('threshold')
+        result['clear'] = bool(diff_result['clear'] and model_result['clear'])
+        if result['clear']:
+            result['reason'] = 'diff and model both report clear'
+        else:
+            reasons = []
+            if not diff_result['clear']:
+                reasons.append('diff: %s' % (diff_result['reason'],))
+            if not model_result['clear']:
+                reasons.append('model: %s' % (model_result['reason'],))
+            result['reason'] = '; '.join(reasons)
+        return result
+
     def check(self):
         with self.lock:
+            if self.backend == 'model':
+                data = self.source.capture()
+                result = self._run_model(data)
+                result['timestamp'] = time.time()
+                if self.config['save_debug']:
+                    self._save_model_debug(data, result)
+                self.last = result
+                logging.info("check[model]: clear=%s p=%.3f threshold=%.3f",
+                             result['clear'], result['probability'],
+                             result['threshold'])
+                return result
             if self.baseline is None:
                 raise NoBaseline("no camera baseline; run BED_CLEAR_CALIBRATE")
             data = self.source.capture()
-            current = self.decoder.decode(data)
-            result = analyse(
-                self.baseline['pixels'], current,
-                self.config['decode_size'][0], self.config['decode_size'][1],
-                self.config['roi'],
-                self.config['cell_threshold'],
-                self.config['min_component_cells'],
-                self.config['max_changed_fraction'])
-            diff = result.pop('_diff')
-            diff_width = result.pop('_diff_width')
-            diff_height = result.pop('_diff_height')
+            diff_result, diff, diff_width, diff_height = self._run_diff(data)
+            if self.backend == 'both':
+                model_result = self._run_model(data)
+                result = self._combine(diff_result, model_result)
+            else:
+                result = diff_result
             result['timestamp'] = time.time()
             result['baseline_created'] = self.baseline['created']
             if self.config['save_debug']:
                 self._save_debug(data, result, diff, diff_width, diff_height)
             self.last = result
-            logging.info(
-                "check: clear=%s changed=%.2f%% largest=%d max_diff=%.2f",
-                result['clear'], result['changed_fraction'] * 100.,
-                result['largest_component'], result['max_diff'])
+            if 'probability' in result:
+                logging.info(
+                    "check[%s]: clear=%s p=%.3f changed=%.2f%%",
+                    self.backend, result['clear'], result['probability'],
+                    result['changed_fraction'] * 100.)
+            else:
+                logging.info(
+                    "check[%s]: clear=%s changed=%.2f%% largest=%d "
+                    "max_diff=%.2f", self.backend, result['clear'],
+                    result['changed_fraction'] * 100.,
+                    result['largest_component'], result['max_diff'])
             return result
 
     def _save_debug(self, data, result, diff, width, height):
@@ -564,10 +806,22 @@ class BedClearChecker:
         except (IOError, OSError) as e:
             logging.warning("could not save debug images: %s", e)
 
+    def _save_model_debug(self, data, result):
+        try:
+            extension = image_extension(data)
+            atomic_write(self._data_path('last_snapshot' + extension), data)
+            atomic_json(self._data_path('last_result.json'), result)
+            stale_diff = self._data_path('last_diff.pgm')
+            if os.path.exists(stale_diff):
+                os.remove(stale_diff)
+        except (IOError, OSError) as e:
+            logging.warning("could not save model debug images: %s", e)
+
     def status(self):
         with self.lock:
             return {
                 'ok': True,
+                'backend': self.backend,
                 'baseline': self.baseline is not None,
                 'baseline_created': (self.baseline['created']
                                      if self.baseline else 0.),
@@ -578,6 +832,8 @@ class BedClearChecker:
                 'max_changed_fraction': self.config['max_changed_fraction'],
                 'source': ('command' if self.config['snapshot_command']
                            else 'url'),
+                'model': (self.model.status()
+                          if self.model is not None else None),
                 'last': self.last,
             }
 
@@ -638,7 +894,7 @@ class CheckerHandler(BaseHTTPRequestHandler):
             except NoBaseline as e:
                 self._send_json(409, {'error': str(e),
                                       'code': 'no_baseline'})
-            except (SnapshotError, DecodeError) as e:
+            except (SnapshotError, DecodeError, ModelError) as e:
                 self._send_json(502, {'error': str(e)})
             except Exception as e:
                 logging.exception("check failed")

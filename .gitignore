@@ -3,6 +3,7 @@ __pycache__/
 *.pgm
 *.pt
 *.onnx
+model_config.json
 bed_clear.json
 baseline.*
 last_snapshot.*

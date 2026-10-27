@@ -130,6 +130,15 @@ else
     echo "  sudo apt install ffmpeg"
 fi
 
+if "$PYTHON" -c 'import onnxruntime' 2>/dev/null; then
+    echo "Model backend: onnxruntime available"
+else
+    echo
+    echo "Model backend (optional): onnxruntime is not installed."
+    echo "  $PYTHON -m pip install onnxruntime"
+    echo "Without it the checker still works in diff mode."
+fi
+
 echo
 echo "Next:"
 echo "  1. Set snapshot_url (or webcam name) in $CONFIG_DIR/bed_clear_camera.cfg"
@@ -137,3 +146,5 @@ echo "  2. Add [include bed_clear.cfg] to printer.cfg"
 echo "  3. Restart Klipper and the checker service"
 echo "  4. Empty the bed, then run BED_CLEAR_CALIBRATE"
 echo "  5. Check the service log: journalctl -u $SERVICE_NAME -f"
+echo "  6. Optional model backend: copy model.onnx and model_config.json to"
+echo "     $DATA_DIR and set backend: both in bed_clear_camera.cfg"

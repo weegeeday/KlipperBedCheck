@@ -5,5 +5,3 @@ Pillow
 scikit-learn
 matplotlib
 onnx
-onnxscript
-onnxruntime

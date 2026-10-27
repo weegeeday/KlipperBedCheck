@@ -2,17 +2,18 @@
 
 A camera-based bed occupancy check for Klipper.
 
-It compares a snapshot of the build plate with an empty-bed baseline and
-answers a single question: **is the bed clear?** The result is exposed as
-`printer.bed_clear` so a print queue can decide whether to start the next job.
-Klipper can also refuse `M24` / `SDCARD_PRINT_FILE` until the bed is verified,
-which stops a queue before the first move.
+It compares a snapshot of the build plate with an empty-bed baseline, or runs a
+small optional ONNX model, and answers a single question: **is the bed clear?**
+The result is exposed as `printer.bed_clear` so a print queue can decide
+whether to start the next job. Klipper can also refuse `M24` /
+`SDCARD_PRINT_FILE` until the bed is verified, which stops a queue before the
+first move.
 
 ```
    Klipper                         checker service                  camera
 +-------------+   HTTP   +-------------------------------+   HTTP   +--------+
 | bed_clear.py|<-------->| camera_checker.py             |<-------->| webcam |
-| state/gate  |  local   | baseline, image compare       | snapshot |        |
+| state/gate  |  local   | diff and/or ONNX model        | snapshot |        |
 +-------------+          +-------------------------------+          +--------+
        |
        +--> printer.bed_clear.clear  -> queue controller
@@ -20,18 +21,26 @@ which stops a queue before the first move.
 ```
 
 The image work lives in a small companion service because Klipper's Python
-environment is not the right place to fetch and decode camera frames. The
-service is a single file with no mandatory Python dependencies.
+environment is not the right place to fetch and decode camera frames. The diff
+backend uses no third-party Python packages; the optional model backend needs
+Pillow, numpy and ONNX Runtime.
 
 ## How it works
 
+There are three detection backends:
+
+| Backend | Behaviour |
+| --- | --- |
+| `diff` | Compare the snapshot with an empty-bed baseline. No model, no extra Python packages. |
+| `model` | Run a small ONNX classifier trained from this repo's `training/` pipeline. |
+| `both` | Require both the diff and the model to report clear. Recommended when deploying a model. |
+
 - `BED_CLEAR_CALIBRATE` captures an empty-bed snapshot and stores it as the
-  baseline.
-- `BED_CLEAR_CHECK` captures a new snapshot, converts both images to a small
-  grayscale grid, normalises brightness/contrast, and looks for changed
-  regions.
-- A changed region larger than `min_component_cells` means something is on the
-  bed. A change spread over a large part of the image also blocks.
+  diff baseline. In `model` mode this is optional; in `diff` and `both` it is
+  required.
+- `BED_CLEAR_CHECK` captures a new snapshot and runs the configured backend.
+- The diff finds changed regions; the model classifies the ROI as clear or
+  not-clear. In `both` mode either one can block the job.
 - After every SD-card print ends (complete, cancel or error), the bed is marked
   `dirty` until it is verified again.
 - The state survives Klipper restarts. If Klipper restarts during a print, the
@@ -42,10 +51,10 @@ service is a single file with no mandatory Python dependencies.
   guarded print is about to start, so a queue can run without a manual check
   between jobs.
 
-## Detection algorithm
+## Diff detection algorithm
 
-Every check is a comparison between two images: the saved empty-bed baseline
-and the new snapshot.
+Every diff check is a comparison between two images: the saved empty-bed
+baseline and the new snapshot.
 
 1. **Capture.** The checker fetches one still frame from the snapshot URL or
    runs `snapshot_command`.
@@ -81,6 +90,43 @@ Because the comparison is normalised, a perfectly uniform global brightness or
 contrast change is ignored. Changing the build sheet changes the surface
 texture and edges, so recalibrate after swapping it.
 
+## Model backend
+
+Train a model with the pipeline in `training/` (see
+[training/README.md](training/README.md)). The run produces `model.onnx` and
+`config.json`. Copy them to the printer:
+
+```bash
+scp training/runs/run1/model.onnx pi@printer:~/printer_data/bed_clear/model.onnx
+scp training/runs/run1/config.json pi@printer:~/printer_data/bed_clear/model_config.json
+```
+
+Install ONNX Runtime in the Python environment that runs the checker:
+
+```bash
+python3 -m pip install onnxruntime
+```
+
+Then set the backend in `bed_clear_camera.cfg`:
+
+```ini
+[camera]
+backend: both
+```
+
+`model` uses only the classifier; `both` requires the diff and the model to
+agree that the bed is clear. `both` is the safer choice.
+
+The checker reads the ROI, input size, normalisation and threshold from the
+model's `config.json`. A `model_threshold` in the camera cfg overrides the
+stored threshold. New training runs export `0.5`; if you deploy an older run
+with a very high threshold, set `model_threshold: 0.5` or retrain. The diff
+backend keeps using the camera cfg's `roi`.
+
+The model result appears in `printer.bed_clear` as `backend`, `probability`
+and `threshold`. A model that fails to load is reported in
+`BED_CLEAR_STATUS` and blocks checks rather than silently falling back.
+
 ## Requirements
 
 - A camera that can return a still snapshot over HTTP, or a command that writes
@@ -88,6 +134,9 @@ texture and edges, so recalibrate after swapping it.
 - Python 3 on the printer host.
 - An image decoder on the host: **Pillow** (`python3-pil`), **ffmpeg**, or
   ImageMagick. The install script checks for one.
+- For the optional model backend: **Pillow**, **numpy** and
+  **ONNX Runtime** (`pip install onnxruntime`). The diff backend does not need
+  them.
 - Klipper with the standard `virtual_sdcard` / `print_stats` support. This is
   what Moonraker and Mainsail use.
 - `block_print_start` needs a Klipper version that allows chaining gcode
@@ -238,11 +287,11 @@ first print immediately.
 | Command | Purpose |
 | --- | --- |
 | `BED_CLEAR_CHECK` | Ask the camera. Raises a gcode error when the bed is not clear. In `manual` mode it only checks the current confirmation. |
-| `BED_CLEAR_CALIBRATE` | Capture a new empty-bed camera baseline. |
+| `BED_CLEAR_CALIBRATE` | Capture a new empty-bed camera baseline (diff and both backends; optional for model-only). |
 | `BED_CLEAR_CONFIRM` | Mark the bed clear after clearing it by hand. |
 | `BED_CLEAR_MARK_DIRTY [REASON=...]` | Mark the bed unverified, e.g. at the end of a custom print macro. |
 | `BED_CLEAR_GATE` | Raise an error unless the last check confirmed the bed is clear. Does not take a picture. |
-| `BED_CLEAR_STATUS` | Print state, camera metrics, change regions and checker status. |
+| `BED_CLEAR_STATUS` | Print state, backend, model status, camera metrics, change regions and checker status. |
 | `BED_CLEAR_RESET [BASELINE=1]` | Forget the current state; `BASELINE=1` also deletes the camera baseline. |
 
 `BED_CLEAR_CHECK` refuses to run while `print_stats` reports `printing` or
@@ -267,7 +316,10 @@ Important fields:
 | `reason` | Human-readable explanation. |
 | `in_print` | A print is currently printing or paused. |
 | `last_check` / `last_check_age` | Unix timestamp and age of the last verification. |
-| `changed_fraction`, `changed_cells`, `largest_component` | Camera metrics from the last check. |
+| `backend` | `diff`, `model` or `both` from the last check. |
+| `probability` | Model `p(not_clear)` when the model backend was used. |
+| `threshold` | Model decision threshold. |
+| `changed_fraction`, `changed_cells`, `largest_component` | Diff metrics from the last check. |
 | `regions` | Up to three changed regions as normalised camera boxes. |
 | `checker_url` | The local checker endpoint. |
 
@@ -348,9 +400,9 @@ gcode:
 
 ## Tuning the camera check
 
-All camera settings live in `bed_clear_camera.cfg`. The only JSON file in the
-project is the Klipper plugin's internal state/metrics file (`bed_clear.json`),
-which you do not edit.
+All camera settings live in `bed_clear_camera.cfg`. The Klipper plugin's state
+is `bed_clear.json`; the model's `model_config.json` is generated by training.
+Neither is meant to be edited by hand (the model threshold is the exception).
 
 The camera settings are:
 
@@ -363,14 +415,18 @@ The camera settings are:
 | `api_key` | empty | Moonraker API key, if authentication is enabled. |
 | `listen_host` | `127.0.0.1` | Checker bind address. Keep it local. |
 | `listen_port` | `7126` | Checker port. |
-| `data_dir` | `~/printer_data/bed_clear` | Baseline and debug files. |
-| `decode_size` | `[80, 60]` | Grayscale grid size. Larger sees smaller objects, slower. |
-| `roi` | `[0, 0, 1, 1]` | Region of interest, normalised image coordinates. |
+| `data_dir` | `~/printer_data/bed_clear` | Baseline, model and debug files. |
+| `backend` | `diff` | `diff`, `model` or `both`. |
+| `model_path` | `~/printer_data/bed_clear/model.onnx` | ONNX model file. |
+| `model_config` | `~/printer_data/bed_clear/model_config.json` | Training `config.json` copy; provides ROI, size, normalisation and threshold. |
+| `model_threshold` | empty | Optional threshold override; default comes from the model config. |
+| `decode_size` | `[80, 60]` | Diff grayscale grid size. Larger sees smaller objects, slower. |
+| `roi` | `[0, 0, 1, 1]` | Diff region of interest. The model backend uses the ROI from its own config. |
 | `cell_threshold` | `0.35` | Normalised brightness difference that counts as changed. Lower is more sensitive. |
 | `min_component_cells` | `6` | Smallest connected changed blob that counts as an object. |
 | `max_changed_fraction` | `0.25` | Fraction of changed cells that blocks even without a large blob. |
 | `snapshot_timeout` | `10` | Snapshot fetch timeout in seconds. |
-| `save_debug` | `true` | Save `last_snapshot`, `last_diff.pgm` and `last_result.json`. |
+| `save_debug` | `true` | Save `last_snapshot` and `last_result.json`; `last_diff.pgm` is also saved for diff/both. |
 | `token` | empty | Optional shared secret; must match `token` in `bed_clear.cfg`. |
 
 ### Set the ROI
@@ -393,13 +449,26 @@ After a check the checker writes:
 
 - `last_snapshot.jpg` (or `.png`) - the raw frame it used.
 - `last_diff.pgm` - the normalised difference image for the ROI. Bright areas
-  are what triggered the check.
-- `last_result.json` - the full result, including changed cells and regions.
+  are what triggered the check. Only written by diff/both.
+- `last_result.json` - the full result, including model probability or diff
+  metrics and regions.
 
 If a check is wrong, look at these first. Most false positives are the toolhead
 moving, a shadow, or a light change; most false negatives are the object being
 outside the ROI, hidden behind something, or too small for the current
 thresholds.
+
+### Model backend tuning
+
+- The model's ROI, input size, normalisation and threshold come from
+  `model_config.json`, which is the training run's `config.json`.
+- Use `model_threshold` in the camera cfg only if you intentionally want to
+  override the trained threshold.
+- `both` is the safest deployment: the diff and the model must both report
+  clear. If either blocks, the bed is blocked.
+- `model` needs no baseline. `both` does; run `BED_CLEAR_CALIBRATE` first.
+- If the model fails to load, `BED_CLEAR_STATUS` shows `model: NOT LOADED` with
+  the error, and checks fail rather than silently falling back to diff.
 
 ### Sensitivity
 
@@ -448,6 +517,20 @@ the decoder.
 
 **"no camera baseline"** - Run `BED_CLEAR_CALIBRATE` with an empty bed. The
 checker returns HTTP 409 until a baseline exists.
+
+**`model: NOT LOADED`** - The checker is in `model` or `both` mode but could not
+load the model. Check:
+
+- `model_path` and `model_config` in `bed_clear_camera.cfg`
+- `onnxruntime` is installed in the checker's Python environment
+- the model config has two classes including `not_clear`
+- the ONNX file is a two-logit classifier exported by `training/train.py`
+
+`BED_CLEAR_STATUS` shows the actual load error. Checks fail until it is fixed;
+the checker does not silently fall back to diff.
+
+**"no camera baseline" in `both` mode** - Run `BED_CLEAR_CALIBRATE` with an
+empty bed. `model` mode does not need a baseline.
 
 **"unable to decode camera snapshot"** - Install Pillow or ffmpeg:
 
@@ -505,8 +588,9 @@ Klipper state file, and restart Klipper.
 
 ## Model training
 
-The `training/` folder contains an optional tiny-CNN pipeline for replacing or
-backing up the image diff. Frames live in `data/frames/` and are gitignored.
+No model is shipped with this repo. The `training/` folder contains a tiny-CNN
+pipeline for training your own and deploying it to the checker. Frames live in
+`data/frames/` and are gitignored.
 
 - `python training/audit_dataset.py` reports duplicates and variation.
 - `python training/draw_roi.py` opens an interactive ROI drawer.
@@ -515,9 +599,22 @@ backing up the image diff. Frames live in `data/frames/` and are gitignored.
   export fails, the checkpoint, config and metrics are still written.
 - `training/colab.ipynb` is the Colab workflow.
 
-See [training/README.md](training/README.md) and [data/README.md](data/README.md).
-The current dataset is still only tens of unique frames per class, so treat
-model accuracy as preliminary until more varied sessions are collected.
+Deploy a run:
+
+```bash
+scp training/runs/run1/model.onnx \
+  pi@printer:~/printer_data/bed_clear/model.onnx
+scp training/runs/run1/config.json \
+  pi@printer:~/printer_data/bed_clear/model_config.json
+```
+
+Install `onnxruntime` in the checker's Python environment, set `backend: both`
+(or `model`) in `bed_clear_camera.cfg`, and restart the checker service. Use the
+same ROI in training and deployment. See
+[training/README.md](training/README.md) and [data/README.md](data/README.md).
+
+Treat model accuracy as preliminary until you have validated it on a separate
+session/day. The test split from a single recording overstates generalisation.
 
 ## Tests
 

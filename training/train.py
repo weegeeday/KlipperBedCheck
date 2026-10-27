@@ -357,7 +357,8 @@ def main():
             unique = paths
         else:
             unique = dedupe(paths, args.dedupe_threshold)
-        print("%-9s %4d files -> %4d unique" % (label, len(paths), len(unique)))
+        print("%-9s %4d files -> %4d unique"
+              % (label, len(paths), len(unique)))
         if len(unique) < args.min_unique and not args.force:
             print("ERROR: only %d unique images for %s (minimum %d)."
                   % (len(unique), label, args.min_unique), file=sys.stderr)
